@@ -39,25 +39,25 @@ export $(cat .env | xargs)
 python bot.py
 ```
 
-## Opsi PostgreSQL (JavaScript Data Layer)
+## Menjalankan 24 Jam Tanpa Railway/Heroku (1 Repo)
 
-Jika ingin data permanen di PostgreSQL, gunakan file JavaScript berikut:
-- `js/db.js` -> koneksi + inisialisasi tabel users.
-- `js/userService.js` -> function user (upsert, cash, exp, custom role/level, dll).
+Project ini sudah disiapkan agar bisa jalan otomatis di server sendiri (VPS/rumah) pakai Docker Compose:
+- `docker-compose.yml` memakai `restart: unless-stopped` supaya bot auto nyala lagi setelah crash/restart container.
+- data SQLite disimpan ke volume Docker `bot_data` di path `/data/bot_data.sqlite3` supaya data user tetap aman saat container restart.
 
-Install dependency JS:
+Langkah:
 
 ```bash
-npm install
+cp .env.example .env
+# isi BOT_TOKEN dan BOT_OWNER_ID
+docker compose up -d --build
 ```
 
-Variable PostgreSQL yang digunakan:
-- `PGHOST`
-- `PGPORT`
-- `PGUSER`
-- `PGPASSWORD`
-- `PGDATABASE`
-- `PGSSL` (`true/false`)
+Untuk cek log:
+
+```bash
+docker compose logs -f telegram-bot
+```
 
 ## Command
 
