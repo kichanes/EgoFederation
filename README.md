@@ -12,7 +12,7 @@ Bot Telegram ini punya fitur:
 - Command bantuan: `/help`.
 - User baru otomatis dapat 1.000 cash.
 - Datetime otomatis tampil saat menggunakan `/profile` dengan timezone WIB.
-- Saat `/profile` dikirim, bot menampilkan bubble menu: `Help`, `Transfer`, `Language`, dan link CH komunitas `Ego Federation`.
+- Saat `/profile` dikirim, bot menampilkan 2 bubble ber-emoji: `❓ Help` dan link CH komunitas `📢 Ego Federation` (`t.me/EgoFederation`).
 - Saat `/profile` dikirim, bot menampilkan foto profil user berbentuk bulat (ukuran kecil) jika tersedia.
 
 ## Instalasi

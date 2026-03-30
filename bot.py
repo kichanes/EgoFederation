@@ -295,13 +295,13 @@ async def create_round_avatar_bytes(context: ContextTypes.DEFAULT_TYPE, telegram
         left = (img.width - size) // 2
         top = (img.height - size) // 2
         square = img.crop((left, top, left + size, top + size))
-        square = ImageOps.fit(square, (256, 256), method=Image.Resampling.LANCZOS)
+        square = ImageOps.fit(square, (64, 64), method=Image.Resampling.LANCZOS)
 
-        mask = Image.new("L", (256, 256), 0)
+        mask = Image.new("L", (64, 64), 0)
         draw = ImageDraw.Draw(mask)
-        draw.ellipse((0, 0, 255, 255), fill=255)
+        draw.ellipse((0, 0, 63, 63), fill=255)
 
-        rounded = Image.new("RGBA", (256, 256), (255, 255, 255, 0))
+        rounded = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
         rounded.paste(square, (0, 0), mask)
 
         output = BytesIO()
@@ -354,12 +354,8 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Help", callback_data="menu_help"),
-                InlineKeyboardButton("Transfer", callback_data="menu_transfer"),
-            ],
-            [
-                InlineKeyboardButton("Language", callback_data="menu_language"),
-                InlineKeyboardButton("Ego Federation", url="https://t.me/EgoFederation"),
+                InlineKeyboardButton("❓ Help", callback_data="menu_help"),
+                InlineKeyboardButton("📢 Ego Federation", url="https://t.me/EgoFederation"),
             ],
         ]
     )
@@ -489,15 +485,14 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     if query.data == "menu_help":
         await query.message.reply_text(
-            "Gunakan /help untuk melihat daftar command pengguna."
-        )
-    elif query.data == "menu_transfer":
-        await query.message.reply_text(
-            "Gunakan /transfer <id_tujuan> <jumlah> atau /tf <id_tujuan> <jumlah>."
-        )
-    elif query.data == "menu_language":
-        await query.message.reply_text(
-            "Language tersedia: Indonesia 🇮🇩 (default)."
+            (
+                "Daftar command pengguna:\n"
+                "/start - daftar/update akun\n"
+                "/profile [id/@username] - lihat profil\n"
+                "/transfer <id_tujuan> <jumlah>\n"
+                "/tf <id_tujuan> <jumlah>\n"
+                "/help - bantuan"
+            )
         )
 
 
