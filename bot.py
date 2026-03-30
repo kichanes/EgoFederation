@@ -60,6 +60,7 @@ class UserProfile:
     cash: int
     level: int
     exp: int
+    custom_role: Optional[str]
 
 
 def get_connection() -> sqlite3.Connection:
@@ -83,6 +84,11 @@ def init_db() -> None:
             )
             """
         )
+
+        columns = conn.execute("PRAGMA table_info(users)").fetchall()
+        col_names = {col["name"] for col in columns}
+        if "custom_role" not in col_names:
+            conn.execute("ALTER TABLE users ADD COLUMN custom_role TEXT")
 
 
 def exp_needed(level: int) -> int:
@@ -113,7 +119,7 @@ def upsert_user(telegram_id: int, full_name: str, username: str) -> None:
 def get_user(telegram_id: int) -> Optional[UserProfile]:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT telegram_id, full_name, username, cash, level, exp FROM users WHERE telegram_id = ?",
+            "SELECT telegram_id, full_name, username, cash, level, exp, custom_role FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ).fetchone()
 
@@ -127,7 +133,26 @@ def get_user(telegram_id: int) -> Optional[UserProfile]:
         cash=row["cash"],
         level=row["level"],
         exp=row["exp"],
+        custom_role=row["custom_role"],
     )
+
+
+def set_custom_role(telegram_id: int, custom_role: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE users SET custom_role = ? WHERE telegram_id = ?", (custom_role, telegram_id))
+    return True
+
+
+def clear_custom_role(telegram_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE users SET custom_role = NULL WHERE telegram_id = ?", (telegram_id,))
+    return True
 
 
 def grant_exp_if_ready(telegram_id: int) -> Optional[tuple[int, int, int]]:
@@ -202,7 +227,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     needed = exp_needed(profile.level)
-    role = get_role(profile.level)
+    role = profile.custom_role if profile.custom_role else get_role(profile.level)
     response = (
         f"Nama : {profile.full_name}\n"
         f"Username : @{profile.username if profile.username != '-' else '-'}\n"
@@ -286,6 +311,61 @@ async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+
+    if update.effective_user.id != BOT_OWNER_ID:
+        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Format: /setrole <id_user> <role_custom>")
+        return
+
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("ID user harus berupa angka.")
+        return
+
+    custom_role = " ".join(context.args[1:]).strip()
+    if not custom_role:
+        await update.message.reply_text("Role custom tidak boleh kosong.")
+        return
+
+    if not set_custom_role(target_id, custom_role):
+        await update.message.reply_text("User belum terdaftar. Minta user /start dulu.")
+        return
+
+    await update.message.reply_text(f"Role user ID {target_id} berhasil diubah ke: {custom_role}")
+
+
+async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+
+    if update.effective_user.id != BOT_OWNER_ID:
+        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("Format: /clearrole <id_user>")
+        return
+
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("ID user harus berupa angka.")
+        return
+
+    if not clear_custom_role(target_id):
+        await update.message.reply_text("User belum terdaftar. Minta user /start dulu.")
+        return
+
+    await update.message.reply_text(f"Role custom user ID {target_id} berhasil dihapus.")
+
+
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None:
         return
@@ -316,6 +396,8 @@ def main() -> None:
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("addcoin", addcoin_command))
     application.add_handler(CommandHandler("transfer", transfer_command))
+    application.add_handler(CommandHandler("setrole", setrole_command))
+    application.add_handler(CommandHandler("clearrole", clearrole_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, group_message_handler))
 
     logger.info("Bot berjalan...")

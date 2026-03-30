@@ -6,6 +6,8 @@ Bot Telegram ini punya fitur:
 - Level up dengan kebutuhan exp bertingkat (`level * 100`).
 - Role otomatis berdasarkan range level.
 - Owner bot bisa tambah cash user lain: `/addcoin <id_user> <jumlah>`.
+- Owner bot bisa custom role user: `/setrole <id_user> <role_custom>`.
+- Owner bot bisa hapus custom role user: `/clearrole <id_user>`.
 - Transfer cash antar user: `/transfer <id_tujuan> <jumlah>`.
 - User baru otomatis dapat 1.000 cash.
 
@@ -38,6 +40,8 @@ python bot.py
 - `/start` -> registrasi/update data user.
 - `/profile` -> tampilkan profil user.
 - `/addcoin <id_user> <jumlah>` -> owner only.
+- `/setrole <id_user> <role_custom>` -> owner only (set role manual).
+- `/clearrole <id_user>` -> owner only (kembali ke role otomatis dari level).
 - `/transfer <id_tujuan> <jumlah>` -> transfer cash.
 
 ## Format Profil
