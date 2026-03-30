@@ -3,13 +3,23 @@ import os
 import random
 import sqlite3
 import time
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from PIL import Image, ImageDraw, ImageOps
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 DB_PATH = os.getenv("DB_PATH", "bot_data.sqlite3")
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
@@ -63,6 +73,7 @@ class UserProfile:
     level: int
     exp: int
     custom_role: Optional[str]
+    custom_level: Optional[int]
 
 
 def get_connection() -> sqlite3.Connection:
@@ -91,6 +102,8 @@ def init_db() -> None:
         col_names = {col["name"] for col in columns}
         if "custom_role" not in col_names:
             conn.execute("ALTER TABLE users ADD COLUMN custom_role TEXT")
+        if "custom_level" not in col_names:
+            conn.execute("ALTER TABLE users ADD COLUMN custom_level INTEGER")
 
 
 def exp_needed(level: int) -> int:
@@ -121,7 +134,7 @@ def upsert_user(telegram_id: int, full_name: str, username: str) -> None:
 def get_user(telegram_id: int) -> Optional[UserProfile]:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT telegram_id, full_name, username, cash, level, exp, custom_role FROM users WHERE telegram_id = ?",
+            "SELECT telegram_id, full_name, username, cash, level, exp, custom_role, custom_level FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ).fetchone()
 
@@ -136,6 +149,7 @@ def get_user(telegram_id: int) -> Optional[UserProfile]:
         level=row["level"],
         exp=row["exp"],
         custom_role=row["custom_role"],
+        custom_level=row["custom_level"],
     )
 
 
@@ -147,7 +161,7 @@ def get_user_by_username(username: str) -> Optional[UserProfile]:
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT telegram_id, full_name, username, cash, level, exp, custom_role
+            SELECT telegram_id, full_name, username, cash, level, exp, custom_role, custom_level
             FROM users
             WHERE LOWER(username) = LOWER(?)
             """,
@@ -165,6 +179,7 @@ def get_user_by_username(username: str) -> Optional[UserProfile]:
         level=row["level"],
         exp=row["exp"],
         custom_role=row["custom_role"],
+        custom_level=row["custom_level"],
     )
 
 
@@ -186,6 +201,24 @@ def clear_custom_role(telegram_id: int) -> bool:
     return True
 
 
+def set_custom_level(telegram_id: int, custom_level: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE users SET custom_level = ? WHERE telegram_id = ?", (custom_level, telegram_id))
+    return True
+
+
+def clear_custom_level(telegram_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE users SET custom_level = NULL WHERE telegram_id = ?", (telegram_id,))
+    return True
+
+
 def resolve_user_reference(user_ref: str) -> Optional[UserProfile]:
     cleaned = user_ref.strip()
     if not cleaned:
@@ -195,12 +228,20 @@ def resolve_user_reference(user_ref: str) -> Optional[UserProfile]:
     return get_user_by_username(cleaned)
 
 
+def is_owner(user_id: int) -> bool:
+    return BOT_OWNER_ID != 0 and user_id == BOT_OWNER_ID
+
+
+def format_number(value: int) -> str:
+    return f"{value:,}".replace(",", ".")
+
+
 def grant_exp_if_ready(telegram_id: int) -> Optional[tuple[int, int, int]]:
     now = int(time.time())
 
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT level, exp, last_exp_time FROM users WHERE telegram_id = ?",
+            "SELECT level, exp, custom_level, last_exp_time FROM users WHERE telegram_id = ?",
             (telegram_id,),
         ).fetchone()
 
@@ -219,7 +260,7 @@ def grant_exp_if_ready(telegram_id: int) -> Optional[tuple[int, int, int]]:
             level += 1
 
         conn.execute(
-            "UPDATE users SET exp = ?, level = ?, last_exp_time = ? WHERE telegram_id = ?",
+            "UPDATE users SET exp = ?, level = ?, custom_level = NULL, last_exp_time = ? WHERE telegram_id = ?",
             (exp, level, now, telegram_id),
         )
 
@@ -238,6 +279,35 @@ def update_cash(telegram_id: int, delta: int) -> bool:
 
         conn.execute("UPDATE users SET cash = ? WHERE telegram_id = ?", (new_cash, telegram_id))
     return True
+
+
+async def create_round_avatar_bytes(context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> Optional[bytes]:
+    photos = await context.bot.get_user_profile_photos(user_id=telegram_id, limit=1)
+    if photos.total_count == 0:
+        return None
+
+    biggest_photo = photos.photos[0][-1]
+    avatar_file = await context.bot.get_file(biggest_photo.file_id)
+    avatar_data = await avatar_file.download_as_bytearray()
+
+    with Image.open(BytesIO(avatar_data)).convert("RGB") as img:
+        size = min(img.width, img.height)
+        left = (img.width - size) // 2
+        top = (img.height - size) // 2
+        square = img.crop((left, top, left + size, top + size))
+        square = ImageOps.fit(square, (256, 256), method=Image.Resampling.LANCZOS)
+
+        mask = Image.new("L", (256, 256), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0, 255, 255), fill=255)
+
+        rounded = Image.new("RGBA", (256, 256), (255, 255, 255, 0))
+        rounded.paste(square, (0, 0), mask)
+
+        output = BytesIO()
+        rounded.save(output, format="PNG")
+        output.seek(0)
+        return output.read()
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -276,26 +346,50 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Data user tidak ditemukan.")
         return
 
-    needed = exp_needed(target_profile.level)
-    role = target_profile.custom_role if target_profile.custom_role else get_role(target_profile.level)
+    shown_level = target_profile.custom_level if target_profile.custom_level else target_profile.level
+    shown_needed = exp_needed(shown_level)
+    role = target_profile.custom_role if target_profile.custom_role else get_role(shown_level)
     now_wib = datetime.now(ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S WIB")
+    date_part, time_part = now_wib.split(" ", 1)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Help", callback_data="menu_help"),
+                InlineKeyboardButton("Transfer", callback_data="menu_transfer"),
+            ],
+            [
+                InlineKeyboardButton("Language", callback_data="menu_language"),
+                InlineKeyboardButton("Ego Federation", url="https://t.me/EgoFederation"),
+            ],
+        ]
+    )
     response = (
         f"Nama : {target_profile.full_name}\n"
         f"Username : @{target_profile.username if target_profile.username != '-' else '-'}\n"
         f"ID : {target_profile.telegram_id}\n"
-        f"Cash : {target_profile.cash}\n"
-        f"Level : {target_profile.level} ({target_profile.exp}/{needed})\n"
+        f"Cash : {format_number(target_profile.cash)}\n"
+        f"Level : {shown_level} ({target_profile.exp}/{shown_needed})\n"
         f"Role : {role}\n"
-        f"Datetime : {now_wib}"
+        f"Date : <i>{date_part}</i>\n"
+        f"Time : <i>{time_part}</i>"
     )
-    await update.message.reply_text(response)
+    avatar_bytes = await create_round_avatar_bytes(context, target_profile.telegram_id)
+    if avatar_bytes:
+        await update.message.reply_photo(
+            photo=avatar_bytes,
+            caption=response,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+    else:
+        await update.message.reply_text(response, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 async def addcoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.message is None:
         return
 
-    if update.effective_user.id != BOT_OWNER_ID:
+    if not is_owner(update.effective_user.id):
         await update.message.reply_text("Perintah ini hanya untuk owner bot.")
         return
 
@@ -318,7 +412,7 @@ async def addcoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Gagal menambah cash. Pastikan user sudah terdaftar lewat /start.")
         return
 
-    await update.message.reply_text(f"Berhasil menambah {amount} cash ke user ID {target_id}.")
+    await update.message.reply_text(f"Berhasil menambah {format_number(amount)} cash ke user ID {target_id}.")
 
 
 async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,8 +452,16 @@ async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     update_cash(target_id, amount)
+    now_wib = datetime.now(ZoneInfo("Asia/Jakarta"))
+    transfer_date = now_wib.strftime("%Y-%m-%d")
+    transfer_time = now_wib.strftime("%H:%M:%S WIB")
     await update.message.reply_text(
-        f"Transfer berhasil: {amount} cash ke ID {target_id}."
+        (
+            f"<i>Transfer berhasil: {format_number(amount)} cash ke ID {target_id}.</i>\n"
+            f"<i>Tanggal: {transfer_date}</i>\n"
+            f"<i>Jam: {transfer_time}</i>"
+        ),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -373,20 +475,37 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Balas pesan orang lalu /profile untuk lihat profil dia\n"
         "/transfer <id_tujuan> <jumlah>\n"
         "/tf <id_tujuan> <jumlah>\n"
-        "/help - bantuan command\n\n"
-        "Owner only:\n"
-        "/addcoin <id_user> <jumlah>\n"
-        "/setrole <id_user/@username> <role_custom>\n"
-        "/clearrole <id_user/@username>"
+        "/help - bantuan command"
     )
     await update.message.reply_text(text)
+
+
+async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query is None:
+        return
+
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_help":
+        await query.message.reply_text(
+            "Gunakan /help untuk melihat daftar command pengguna."
+        )
+    elif query.data == "menu_transfer":
+        await query.message.reply_text(
+            "Gunakan /transfer <id_tujuan> <jumlah> atau /tf <id_tujuan> <jumlah>."
+        )
+    elif query.data == "menu_language":
+        await query.message.reply_text(
+            "Language tersedia: Indonesia 🇮🇩 (default)."
+        )
 
 
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.message is None:
         return
 
-    if update.effective_user.id != BOT_OWNER_ID:
+    if not is_owner(update.effective_user.id):
         await update.message.reply_text("Perintah ini hanya untuk owner bot.")
         return
 
@@ -415,7 +534,7 @@ async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if update.effective_user is None or update.message is None:
         return
 
-    if update.effective_user.id != BOT_OWNER_ID:
+    if not is_owner(update.effective_user.id):
         await update.message.reply_text("Perintah ini hanya untuk owner bot.")
         return
 
@@ -432,6 +551,62 @@ async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await update.message.reply_text(
         f"Role custom user {target_profile.full_name} (ID {target_profile.telegram_id}) berhasil dihapus."
+    )
+
+
+async def setlevel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        return
+
+    if len(context.args) != 2:
+        await update.message.reply_text("Format: /setlevel <id_user/@username> <level_custom>")
+        return
+
+    target_profile = resolve_user_reference(context.args[0])
+    if target_profile is None:
+        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
+        return
+
+    try:
+        custom_level = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Level custom harus berupa angka.")
+        return
+
+    if custom_level < 1:
+        await update.message.reply_text("Level custom minimal 1.")
+        return
+
+    set_custom_level(target_profile.telegram_id, custom_level)
+    await update.message.reply_text(
+        f"Level custom user {target_profile.full_name} (ID {target_profile.telegram_id}) diubah ke {custom_level}."
+    )
+
+
+async def defaultlevel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("Format: /defaultlevel <id_user/@username>")
+        return
+
+    target_profile = resolve_user_reference(context.args[0])
+    if target_profile is None:
+        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
+        return
+
+    clear_custom_level(target_profile.telegram_id)
+    await update.message.reply_text(
+        f"Level user {target_profile.full_name} (ID {target_profile.telegram_id}) dikembalikan ke level asli."
     )
 
 
@@ -469,6 +644,9 @@ def main() -> None:
     application.add_handler(CommandHandler("tf", transfer_command))
     application.add_handler(CommandHandler("setrole", setrole_command))
     application.add_handler(CommandHandler("clearrole", clearrole_command))
+    application.add_handler(CommandHandler("setlevel", setlevel_command))
+    application.add_handler(CommandHandler("defaultlevel", defaultlevel_command))
+    application.add_handler(CallbackQueryHandler(menu_callback_handler, pattern="^menu_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, group_message_handler))
 
     logger.info("Bot berjalan...")
