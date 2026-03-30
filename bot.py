@@ -4,7 +4,8 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from telegram import Update
@@ -277,13 +278,15 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     needed = exp_needed(target_profile.level)
     role = target_profile.custom_role if target_profile.custom_role else get_role(target_profile.level)
+    now_wib = datetime.now(ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S WIB")
     response = (
         f"Nama : {target_profile.full_name}\n"
         f"Username : @{target_profile.username if target_profile.username != '-' else '-'}\n"
         f"ID : {target_profile.telegram_id}\n"
         f"Cash : {target_profile.cash}\n"
         f"Level : {target_profile.level} ({target_profile.exp}/{needed})\n"
-        f"Role : {role}"
+        f"Role : {role}\n"
+        f"Datetime : {now_wib}"
     )
     await update.message.reply_text(response)
 
@@ -360,15 +363,6 @@ async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
-async def datetime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None:
-        return
-    now_utc = datetime.now(timezone.utc)
-    await update.message.reply_text(
-        f"Waktu server (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC"
-    )
-
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -379,7 +373,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Balas pesan orang lalu /profile untuk lihat profil dia\n"
         "/transfer <id_tujuan> <jumlah>\n"
         "/tf <id_tujuan> <jumlah>\n"
-        "/datetime - lihat waktu server\n"
         "/help - bantuan command\n\n"
         "Owner only:\n"
         "/addcoin <id_user> <jumlah>\n"
@@ -470,7 +463,6 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("datetime", datetime_command))
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("addcoin", addcoin_command))
     application.add_handler(CommandHandler("transfer", transfer_command))

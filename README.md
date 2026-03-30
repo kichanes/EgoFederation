@@ -9,9 +9,9 @@ Bot Telegram ini punya fitur:
 - Owner bot bisa custom role user via ID/username: `/setrole <id_user/@username> <role_custom>`.
 - Owner bot bisa hapus custom role user via ID/username: `/clearrole <id_user/@username>`.
 - Transfer cash antar user: `/transfer <id_tujuan> <jumlah>` atau `/tf <id_tujuan> <jumlah>`.
-- Command waktu server: `/datetime`.
 - Command bantuan: `/help`.
 - User baru otomatis dapat 1.000 cash.
+- Datetime otomatis tampil saat menggunakan `/profile` dengan timezone WIB.
 
 ## Instalasi
 
@@ -48,7 +48,6 @@ python bot.py
 - `/clearrole <id_user/@username>` -> owner only (kembali ke role otomatis dari level).
 - `/transfer <id_tujuan> <jumlah>` -> transfer cash.
 - `/tf <id_tujuan> <jumlah>` -> alias singkat transfer.
-- `/datetime` -> lihat waktu server UTC.
 - `/help` -> tampilkan daftar command.
 
 ## Format Profil
@@ -60,4 +59,5 @@ ID :
 Cash :
 Level : 15 (exp_saat_ini/exp_diperlukan)
 Role :
+Datetime :
 ```
