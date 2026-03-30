@@ -39,6 +39,26 @@ export $(cat .env | xargs)
 python bot.py
 ```
 
+## Opsi PostgreSQL (JavaScript Data Layer)
+
+Jika ingin data permanen di PostgreSQL, gunakan file JavaScript berikut:
+- `js/db.js` -> koneksi + inisialisasi tabel users.
+- `js/userService.js` -> function user (upsert, cash, exp, custom role/level, dll).
+
+Install dependency JS:
+
+```bash
+npm install
+```
+
+Variable PostgreSQL yang digunakan:
+- `PGHOST`
+- `PGPORT`
+- `PGUSER`
+- `PGPASSWORD`
+- `PGDATABASE`
+- `PGSSL` (`true/false`)
+
 ## Command
 
 - `/start` -> registrasi/update data user.
