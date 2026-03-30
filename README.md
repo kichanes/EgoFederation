@@ -6,9 +6,11 @@ Bot Telegram ini punya fitur:
 - Level up dengan kebutuhan exp bertingkat (`level * 100`).
 - Role otomatis berdasarkan range level.
 - Owner bot bisa tambah cash user lain: `/addcoin <id_user> <jumlah>`.
-- Owner bot bisa custom role user: `/setrole <id_user> <role_custom>`.
-- Owner bot bisa hapus custom role user: `/clearrole <id_user>`.
-- Transfer cash antar user: `/transfer <id_tujuan> <jumlah>`.
+- Owner bot bisa custom role user via ID/username: `/setrole <id_user/@username> <role_custom>`.
+- Owner bot bisa hapus custom role user via ID/username: `/clearrole <id_user/@username>`.
+- Transfer cash antar user: `/transfer <id_tujuan> <jumlah>` atau `/tf <id_tujuan> <jumlah>`.
+- Command waktu server: `/datetime`.
+- Command bantuan: `/help`.
 - User baru otomatis dapat 1.000 cash.
 
 ## Instalasi
@@ -38,11 +40,16 @@ python bot.py
 ## Command
 
 - `/start` -> registrasi/update data user.
-- `/profile` -> tampilkan profil user.
+- `/profile` -> tampilkan profil sendiri.
+- `/profile <id/@username>` -> tampilkan profil user lain.
+- Reply pesan user lalu ketik `/profile` -> tampilkan profil user yang direply.
 - `/addcoin <id_user> <jumlah>` -> owner only.
-- `/setrole <id_user> <role_custom>` -> owner only (set role manual).
-- `/clearrole <id_user>` -> owner only (kembali ke role otomatis dari level).
+- `/setrole <id_user/@username> <role_custom>` -> owner only (set role manual).
+- `/clearrole <id_user/@username>` -> owner only (kembali ke role otomatis dari level).
 - `/transfer <id_tujuan> <jumlah>` -> transfer cash.
+- `/tf <id_tujuan> <jumlah>` -> alias singkat transfer.
+- `/datetime` -> lihat waktu server UTC.
+- `/help` -> tampilkan daftar command.
 
 ## Format Profil
 

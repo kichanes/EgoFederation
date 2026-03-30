@@ -4,6 +4,7 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 from telegram import Update
@@ -137,6 +138,35 @@ def get_user(telegram_id: int) -> Optional[UserProfile]:
     )
 
 
+def get_user_by_username(username: str) -> Optional[UserProfile]:
+    normalized = username.lstrip("@").strip()
+    if not normalized:
+        return None
+
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT telegram_id, full_name, username, cash, level, exp, custom_role
+            FROM users
+            WHERE LOWER(username) = LOWER(?)
+            """,
+            (normalized,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return UserProfile(
+        telegram_id=row["telegram_id"],
+        full_name=row["full_name"],
+        username=row["username"],
+        cash=row["cash"],
+        level=row["level"],
+        exp=row["exp"],
+        custom_role=row["custom_role"],
+    )
+
+
 def set_custom_role(telegram_id: int, custom_role: str) -> bool:
     with get_connection() as conn:
         row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
@@ -153,6 +183,15 @@ def clear_custom_role(telegram_id: int) -> bool:
             return False
         conn.execute("UPDATE users SET custom_role = NULL WHERE telegram_id = ?", (telegram_id,))
     return True
+
+
+def resolve_user_reference(user_ref: str) -> Optional[UserProfile]:
+    cleaned = user_ref.strip()
+    if not cleaned:
+        return None
+    if cleaned.lstrip("-").isdigit():
+        return get_user(int(cleaned))
+    return get_user_by_username(cleaned)
 
 
 def grant_exp_if_ready(telegram_id: int) -> Optional[tuple[int, int, int]]:
@@ -220,20 +259,30 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = update.effective_user
     username = user.username or "-"
     upsert_user(user.id, user.full_name, username)
-    profile = get_user(user.id)
+    target_profile: Optional[UserProfile] = None
 
-    if profile is None:
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        reply_user = update.message.reply_to_message.from_user
+        reply_username = reply_user.username or "-"
+        upsert_user(reply_user.id, reply_user.full_name, reply_username)
+        target_profile = get_user(reply_user.id)
+    elif context.args:
+        target_profile = resolve_user_reference(context.args[0])
+    else:
+        target_profile = get_user(user.id)
+
+    if target_profile is None:
         await update.message.reply_text("Data user tidak ditemukan.")
         return
 
-    needed = exp_needed(profile.level)
-    role = profile.custom_role if profile.custom_role else get_role(profile.level)
+    needed = exp_needed(target_profile.level)
+    role = target_profile.custom_role if target_profile.custom_role else get_role(target_profile.level)
     response = (
-        f"Nama : {profile.full_name}\n"
-        f"Username : @{profile.username if profile.username != '-' else '-'}\n"
-        f"ID : {profile.telegram_id}\n"
-        f"Cash : {profile.cash}\n"
-        f"Level : {profile.level} ({profile.exp}/{needed})\n"
+        f"Nama : {target_profile.full_name}\n"
+        f"Username : @{target_profile.username if target_profile.username != '-' else '-'}\n"
+        f"ID : {target_profile.telegram_id}\n"
+        f"Cash : {target_profile.cash}\n"
+        f"Level : {target_profile.level} ({target_profile.exp}/{needed})\n"
         f"Role : {role}"
     )
     await update.message.reply_text(response)
@@ -311,6 +360,35 @@ async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+async def datetime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    now_utc = datetime.now(timezone.utc)
+    await update.message.reply_text(
+        f"Waktu server (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    text = (
+        "Daftar command:\n"
+        "/start - daftar/update akun\n"
+        "/profile [id/@username] - lihat profil sendiri/target\n"
+        "Balas pesan orang lalu /profile untuk lihat profil dia\n"
+        "/transfer <id_tujuan> <jumlah>\n"
+        "/tf <id_tujuan> <jumlah>\n"
+        "/datetime - lihat waktu server\n"
+        "/help - bantuan command\n\n"
+        "Owner only:\n"
+        "/addcoin <id_user> <jumlah>\n"
+        "/setrole <id_user/@username> <role_custom>\n"
+        "/clearrole <id_user/@username>"
+    )
+    await update.message.reply_text(text)
+
+
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.message is None:
         return
@@ -323,10 +401,9 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Format: /setrole <id_user> <role_custom>")
         return
 
-    try:
-        target_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("ID user harus berupa angka.")
+    target_profile = resolve_user_reference(context.args[0])
+    if target_profile is None:
+        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
         return
 
     custom_role = " ".join(context.args[1:]).strip()
@@ -334,11 +411,11 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Role custom tidak boleh kosong.")
         return
 
-    if not set_custom_role(target_id, custom_role):
-        await update.message.reply_text("User belum terdaftar. Minta user /start dulu.")
-        return
+    set_custom_role(target_profile.telegram_id, custom_role)
 
-    await update.message.reply_text(f"Role user ID {target_id} berhasil diubah ke: {custom_role}")
+    await update.message.reply_text(
+        f"Role user {target_profile.full_name} (ID {target_profile.telegram_id}) berhasil diubah ke: {custom_role}"
+    )
 
 
 async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -353,17 +430,16 @@ async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Format: /clearrole <id_user>")
         return
 
-    try:
-        target_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("ID user harus berupa angka.")
+    target_profile = resolve_user_reference(context.args[0])
+    if target_profile is None:
+        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
         return
 
-    if not clear_custom_role(target_id):
-        await update.message.reply_text("User belum terdaftar. Minta user /start dulu.")
-        return
+    clear_custom_role(target_profile.telegram_id)
 
-    await update.message.reply_text(f"Role custom user ID {target_id} berhasil dihapus.")
+    await update.message.reply_text(
+        f"Role custom user {target_profile.full_name} (ID {target_profile.telegram_id}) berhasil dihapus."
+    )
 
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -393,9 +469,12 @@ def main() -> None:
     application = Application.builder().token(token).build()
 
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("datetime", datetime_command))
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("addcoin", addcoin_command))
     application.add_handler(CommandHandler("transfer", transfer_command))
+    application.add_handler(CommandHandler("tf", transfer_command))
     application.add_handler(CommandHandler("setrole", setrole_command))
     application.add_handler(CommandHandler("clearrole", clearrole_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, group_message_handler))
