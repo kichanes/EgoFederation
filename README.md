@@ -11,6 +11,9 @@ Bot Telegram ini memiliki fitur:
   - `/pot` (Potion Merah, +10% HP)
   - `/armor` (pakai Armor item, +100 armor)
   - `/lp` (Lucky Potion, buff luck +5% selama 60 menit)
+- Item lempar:
+  - `/kp` (pakai 🍌 Kulit Pisang ke target, damage 5-10)
+  - `/semak` (pakai 🩴 Sandal Emak ke target, damage 7-12)
 - Combat `/dor` (reply atau target ID/@username) dengan logika pistol/perisai.
 - Token dari `/daily` dan `/weekly`.
 - Secret shop terbuka saat level >= 5.
@@ -54,10 +57,15 @@ docker compose logs -f telegram-bot
 - `/armor`
 - `/lp`
 - `/dor <id/@username>` atau reply lalu `/dor`
+- `/kp <id/@username>` atau reply lalu `/kp`
+- `/semak <id/@username>` atau reply lalu `/semak`
 - `/transfer <id_tujuan> <jumlah>`
 - `/tf <id_tujuan> <jumlah>`
 - `/daily`
 - `/weekly`
+- `/cd` (cek cooldown claim daily/weekly)
+- Daily reward: `+150 cash` dan `+50 exp`
+- Weekly reward: `+500 cash`, `+250 exp`, `+1 token`, dan `1 chest random`
 - `/help`
 
 ## Command Owner

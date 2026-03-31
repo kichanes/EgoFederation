@@ -23,6 +23,11 @@ EXP_MIN = 5
 EXP_MAX = 15
 EXP_COOLDOWN_SECONDS = 300
 MAX_HP = 200
+DAILY_COOLDOWN = 24 * 3600
+WEEKLY_COOLDOWN = 7 * 24 * 3600
+KP_DAMAGE_RANGE = (5, 10)
+SEMAK_DAMAGE_RANGE = (7, 12)
+DOR_STEAL_RANGE = (100, 500)
 
 ROLE_RANGES = [
     (1, 5, "💩 Manusia Antah Berantah"), (6, 10, "👩🏿‍🦲 Super Gembel"), (11, 15, "👩🏾‍🦲 Gembel"),
@@ -44,6 +49,24 @@ ITEMS = {
     "pistol_3": {"name": "🔫 Pistol Kelas III", "price": 5000, "desc": "Untuk /dor"},
     "potion_red": {"name": "🩸 Potion Pot HP +10%", "price": 100, "desc": "Tambah HP 10% (pakai /pot)"},
     "armor_item": {"name": "🦺 Armor (Armor+100)", "price": 5000, "desc": "Tambah armor +100 (pakai /armor)"},
+}
+
+CHEST_RATES = [
+    ("uncommon", 43.0),
+    ("common", 33.0),
+    ("rare", 13.0),
+    ("epic", 7.5),
+    ("legend", 3.0),
+    ("myth", 0.0015),
+]
+
+CHEST_REWARDS = {
+    "uncommon": {"cash": 150, "token": (0, 1), "items": []},
+    "common": {"cash": 250, "token": (0, 2), "items": []},
+    "rare": {"cash": 350, "token": (1, 2), "items": ["banana"]},
+    "epic": {"cash": 500, "token": (1, 3), "items": ["banana", "sandal"]},
+    "legend": {"cash": 750, "token": (2, 3), "items": ["banana", "sandal", "luck_potion"]},
+    "myth": {"cash": 1500, "token": (2, 5), "items": ["banana", "sandal", "luck_potion", "armor_item", "pistol_3"]},
 }
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -128,6 +151,21 @@ def init_db() -> None:
             )
             """,
         )
+        db_execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS action_logs (
+                id INTEGER PRIMARY KEY,
+                action_type TEXT NOT NULL,
+                actor_id INTEGER,
+                target_id INTEGER,
+                amount INTEGER NOT NULL DEFAULT 0,
+                item_key TEXT,
+                description TEXT,
+                created_at BIGINT NOT NULL
+            )
+            """,
+        )
         if IS_POSTGRES:
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_role TEXT")
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_level INTEGER")
@@ -154,6 +192,18 @@ def init_db() -> None:
             for col, sql_type in migrations.items():
                 if col not in columns:
                     db_execute(conn, f"ALTER TABLE users ADD COLUMN {col} {sql_type}")
+
+
+def log_action(action_type: str, actor_id: int, target_id: int = 0, amount: int = 0, item_key: str = "", description: str = "") -> None:
+    with get_connection() as conn:
+        db_execute(
+            conn,
+            """
+            INSERT INTO action_logs (action_type, actor_id, target_id, amount, item_key, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (action_type, actor_id, target_id, amount, item_key, description, int(time.time())),
+        )
 
 
 def now_wib() -> datetime:
@@ -342,6 +392,40 @@ def luck_active(user: UserProfile) -> bool:
     return user.luck_buff_until > int(time.time())
 
 
+def weighted_pick(weighted: list[tuple[str, float]]) -> str:
+    total = sum(w for _, w in weighted)
+    r = random.uniform(0, total)
+    acc = 0.0
+    for key, w in weighted:
+        acc += w
+        if r <= acc:
+            return key
+    return weighted[-1][0]
+
+
+def roll_chest_tier(with_luck: bool) -> str:
+    rates = []
+    for tier, rate in CHEST_RATES:
+        if with_luck and tier in {"rare", "epic", "legend", "myth"}:
+            rate *= 1.05
+        elif with_luck:
+            rate *= 0.95
+        rates.append((tier, rate))
+    return weighted_pick(rates)
+
+
+def roll_item_from_pool(pool: list[str]) -> str:
+    # requested item chance in same chest set
+    weights = {
+        "banana": 50.0,
+        "sandal": 50.0,
+        "luck_potion": 15.0,
+        "armor_item": 10.0,
+        "pistol_3": 10.0,
+    }
+    return weighted_pick([(k, weights[k]) for k in pool])
+
+
 def choose_pistol(inv: dict[str, int]) -> Optional[tuple[str, int]]:
     # prioritas dari kelas III -> II -> I
     for key, cls in [("pistol_3", 3), ("pistol_2", 2), ("pistol_1", 1)]:
@@ -410,7 +494,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await update.message.reply_text(
         "Daftar command:\n"
-        "/start, /p (/profile), /status, /inv, /shop, /buy <kode>, /pot, /armor, /lp, /dor, /transfer (/tf), /help\n"
+        "/start, /p (/profile), /status, /inv, /shop, /buy <kode>, /pot, /armor, /lp, /kp, /semak, /dor, /transfer (/tf), /help\n"
         "/daily, /weekly"
     )
 
@@ -423,7 +507,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if q.data == "menu_help":
         await q.message.reply_text(
             "Command pengguna:\n"
-            "/start\n/p atau /profile\n/status\n/inv\n/shop\n/buy <kode>\n/pot\n/armor\n/lp\n/dor\n/transfer atau /tf\n/daily\n/weekly\n/help"
+            "/start\n/p atau /profile\n/status\n/inv\n/shop\n/buy <kode>\n/pot\n/armor\n/lp\n/kp\n/semak\n/dor\n/transfer atau /tf\n/daily\n/weekly\n/help"
         )
 
 
@@ -522,6 +606,7 @@ async def process_buy(uid: int, key: str, reply_fn) -> None:
         await reply_fn(msg)
         return
     update_cash(uid, -item["price"])
+    log_action("buy", uid, amount=item["price"], item_key=key, description="Pembelian shop")
     await reply_fn(f"Berhasil beli {item['name']} seharga {format_number(item['price'])}.")
 
 
@@ -570,6 +655,10 @@ async def lp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not update.effective_user or not update.message:
         return
     uid = update.effective_user.id
+    current = get_user(uid)
+    if current and luck_active(current):
+        await update.message.reply_text("Lucky Potion sudah aktif. Tidak bisa double effect.")
+        return
     if not remove_item(uid, "luck_potion", 1):
         await update.message.reply_text("Lucky Potion tidak ada di inventory.")
         return
@@ -587,6 +676,48 @@ def resolve_target_from_update(update: Update, args: list[str]) -> Optional[User
     if args:
         return resolve_user_reference(args[0])
     return None
+
+
+async def kp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    attacker = get_user(update.effective_user.id)
+    target = resolve_target_from_update(update, context.args)
+    if not attacker or not target or target.telegram_id == attacker.telegram_id:
+        await update.message.reply_text("Target tidak valid. Gunakan reply atau /kp <id/@username>.")
+        return
+    if not remove_item(attacker.telegram_id, "banana", 1):
+        await update.message.reply_text("Kamu tidak punya 🍌 Kulit Pisang.")
+        return
+    damage = random.randint(*KP_DAMAGE_RANGE)
+    update_hp_armor(target.telegram_id, hp_delta=-damage)
+    lines = ["Eh ayam!", "Waduh kepeleset cuy!", "Lantai licin bosku!", "Aduh, kok bisa ya?!"]
+    log_action("kp", attacker.telegram_id, target.telegram_id, damage, "banana", "Kulit pisang digunakan")
+    await update.message.reply_text(
+        f"{attacker.full_name} melempar 🍌 Kulit Pisang ke arah {target.full_name}\n"
+        f"{target.full_name} terjatuh: \"{random.choice(lines)}\"\nDamage: {damage}"
+    )
+
+
+async def semak_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    attacker = get_user(update.effective_user.id)
+    target = resolve_target_from_update(update, context.args)
+    if not attacker or not target or target.telegram_id == attacker.telegram_id:
+        await update.message.reply_text("Target tidak valid. Gunakan reply atau /semak <id/@username>.")
+        return
+    if not remove_item(attacker.telegram_id, "sandal", 1):
+        await update.message.reply_text("Kamu tidak punya 🩴 Sandal Emak.")
+        return
+    damage = random.randint(*SEMAK_DAMAGE_RANGE)
+    update_hp_armor(target.telegram_id, hp_delta=-damage)
+    lines = ["Matane cok!", "Sadar, nak!", "DOR! geprak!", "Hadehh, kena tempel!"]
+    log_action("semak", attacker.telegram_id, target.telegram_id, damage, "sandal", "Sandal emak digunakan")
+    await update.message.reply_text(
+        f"{attacker.full_name} melempar 🩴 Sandal Emak ke arah {target.full_name}\n"
+        f"{target.full_name} tergeplak: \"{random.choice(lines)}\"\nDamage: {damage}"
+    )
 
 
 async def dor_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -609,12 +740,20 @@ async def dor_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     pistol_key, pistol_class = pistol
     remove_item(attacker.telegram_id, pistol_key, 1)
 
-    base_steal = random.randint(1, 50)
+    base_steal = random.randint(*DOR_STEAL_RANGE)
     if luck_active(attacker):
         base_steal = int(base_steal * 1.05)
     base_damage = {1: 25, 2: 20, 3: 15}[pistol_class]
 
     inv_target = get_inventory(target.telegram_id)
+    if inv_target.get("armor_item", 0) > 0:
+        remove_item(target.telegram_id, "armor_item", 1)
+        log_action("dor_blocked", attacker.telegram_id, target.telegram_id, 0, pistol_key, "Diblok armor inventory")
+        await update.message.reply_text(
+            f"{target.full_name} memiliki 🛡️ Armor di inventory. Pencurian gagal! "
+            f"Armor target dan pistol kamu sama-sama hancur."
+        )
+        return
     shield = available_shield(inv_target)
     note = ""
     steal = base_steal
@@ -666,6 +805,7 @@ async def dor_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"/dor berhasil ke {target.full_name} dengan Pistol Kelas {pistol_class}.\n"
         f"Cash dicuri: {format_number(steal)}\nDamage: {damage}\n{note}"
     )
+    log_action("dor", attacker.telegram_id, target.telegram_id, steal, pistol_key, f"damage={damage}")
 
 
 async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -699,6 +839,7 @@ async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"<i>Jam: {nw.strftime('%H:%M:%S WIB')}</i>",
         parse_mode=ParseMode.HTML,
     )
+    log_action("transfer", sender.id, tid, amount, "", "Transfer cash")
 
 
 async def addcoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -859,8 +1000,10 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE, week
     uid = update.effective_user.id
     now = int(time.time())
     col = "last_weekly" if weekly else "last_daily"
-    cd = 7 * 24 * 3600 if weekly else 24 * 3600
-    reward = 3 if weekly else 1
+    cd = WEEKLY_COOLDOWN if weekly else DAILY_COOLDOWN
+    cash_reward = 500 if weekly else 150
+    exp_reward = 250 if weekly else 50
+    token_reward = 1 if weekly else 0
     with get_connection() as conn:
         row = db_execute(conn, f"SELECT {col} FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row:
@@ -870,8 +1013,82 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE, week
             await update.message.reply_text(f"Belum bisa claim. Tunggu {remain//3600} jam lagi.")
             return
         db_execute(conn, f"UPDATE users SET {col}=? WHERE telegram_id=?", (now, uid))
-    add_item(uid, "token", reward)
-    await update.message.reply_text(f"Berhasil claim {'weekly' if weekly else 'daily'}: +{reward} token.")
+    update_cash(uid, cash_reward)
+    add_exp_to_user(uid, exp_reward)
+    if token_reward:
+        add_item(uid, "token", token_reward)
+
+    extra_msg = ""
+    if weekly:
+        user = get_user(uid)
+        tier = roll_chest_tier(luck_active(user) if user else False)
+        chest_cash = 0
+        chest_tokens = 0
+        gained_items: list[str] = []
+        if tier == "uncommon":
+            chest_cash, chest_tokens = CHEST_REWARDS["uncommon"]["cash"], random.randint(*CHEST_REWARDS["uncommon"]["token"])
+        elif tier == "common":
+            chest_cash, chest_tokens = CHEST_REWARDS["common"]["cash"], random.randint(*CHEST_REWARDS["common"]["token"])
+        elif tier == "rare":
+            chest_cash, chest_tokens = CHEST_REWARDS["rare"]["cash"], random.randint(*CHEST_REWARDS["rare"]["token"])
+            add_item(uid, "banana", 1)
+            gained_items.append("🍌 Kulit Pisang")
+        elif tier == "epic":
+            chest_cash, chest_tokens = CHEST_REWARDS["epic"]["cash"], random.randint(*CHEST_REWARDS["epic"]["token"])
+            it = roll_item_from_pool(CHEST_REWARDS["epic"]["items"])
+            add_item(uid, it, 1)
+            gained_items.append(ITEMS[it]["name"])
+        elif tier == "legend":
+            chest_cash, chest_tokens = CHEST_REWARDS["legend"]["cash"], random.randint(*CHEST_REWARDS["legend"]["token"])
+            it = roll_item_from_pool(CHEST_REWARDS["legend"]["items"])
+            add_item(uid, it, 1)
+            gained_items.append(ITEMS[it]["name"])
+        elif tier == "myth":
+            chest_cash, chest_tokens = CHEST_REWARDS["myth"]["cash"], random.randint(*CHEST_REWARDS["myth"]["token"])
+            it = roll_item_from_pool(CHEST_REWARDS["myth"]["items"])
+            add_item(uid, it, 1)
+            gained_items.append(ITEMS[it]["name"])
+
+        update_cash(uid, chest_cash)
+        if chest_tokens:
+            add_item(uid, "token", chest_tokens)
+        item_text = ", ".join(gained_items) if gained_items else "-"
+        extra_msg = (
+            f"\n🎁 Chest Weekly: {tier.upper()}"
+            f"\n+Cash: {format_number(chest_cash)}"
+            f"\n+Token: {chest_tokens}"
+            f"\n+Item: {item_text}"
+        )
+
+    msg = (
+        f"Berhasil claim {'weekly' if weekly else 'daily'}!"
+        f"\n+Cash: {format_number(cash_reward)}"
+        f"\n+EXP: {format_number(exp_reward)}"
+    )
+    if token_reward:
+        msg += f"\n+Token: {token_reward}"
+    msg += extra_msg
+    await update.message.reply_text(msg)
+    log_action("claim_weekly" if weekly else "claim_daily", uid, amount=cash_reward, item_key="token" if token_reward else "", description=msg[:200])
+
+
+async def cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    uid = update.effective_user.id
+    now = int(time.time())
+    with get_connection() as conn:
+        row = db_execute(conn, "SELECT last_daily, last_weekly FROM users WHERE telegram_id=?", (uid,), fetch="one")
+    if not row:
+        await update.message.reply_text("User belum terdaftar, gunakan /start dulu.")
+        return
+    daily_rem = max(0, DAILY_COOLDOWN - (now - row["last_daily"]))
+    weekly_rem = max(0, WEEKLY_COOLDOWN - (now - row["last_weekly"]))
+    await update.message.reply_text(
+        f"Cooldown Claim:\n"
+        f"- Daily: {'Siap claim' if daily_rem == 0 else f'{daily_rem//3600}j {(daily_rem%3600)//60}m'}\n"
+        f"- Weekly: {'Siap claim' if weekly_rem == 0 else f'{weekly_rem//3600}j {(weekly_rem%3600)//60}m'}"
+    )
 
 
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -909,10 +1126,13 @@ def main() -> None:
     app.add_handler(CommandHandler("pot", potion_command))
     app.add_handler(CommandHandler("armor", armor_command))
     app.add_handler(CommandHandler("lp", lp_command))
+    app.add_handler(CommandHandler("kp", kp_command))
+    app.add_handler(CommandHandler("semak", semak_command))
     app.add_handler(CommandHandler("dor", dor_command))
     app.add_handler(CommandHandler(["transfer", "tf"], transfer_command))
     app.add_handler(CommandHandler("daily", daily_command))
     app.add_handler(CommandHandler("weekly", weekly_command))
+    app.add_handler(CommandHandler("cd", cooldown_command))
 
     app.add_handler(CommandHandler(["addcoin", "ac"], addcoin_command))
     app.add_handler(CommandHandler(["setrole", "sr"], setrole_command))
