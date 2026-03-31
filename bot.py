@@ -3,23 +3,14 @@ import os
 import random
 import sqlite3
 import time
-from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageOps
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 DB_PATH = os.getenv("DB_PATH", "bot_data.sqlite3")
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
@@ -27,40 +18,31 @@ INITIAL_CASH = 1000
 EXP_MIN = 5
 EXP_MAX = 15
 EXP_COOLDOWN_SECONDS = 300
+MAX_HP = 200
 
 ROLE_RANGES = [
-    (1, 5, "💩 Manusia Antah Berantah"),
-    (6, 10, "👩🏿‍🦲 Super Gembel"),
-    (11, 15, "👩🏾‍🦲 Gembel"),
-    (16, 20, "👩🏽‍🦲 Gembel Elite"),
-    (21, 25, "👩🏼‍🦲 Jelata"),
-    (26, 30, "🪔 Pengemis Pemula"),
-    (31, 40, "🪔 Pengemis Biasa"),
-    (41, 45, "🪔 Pengemis Senior"),
-    (46, 50, "🪔 Pengemis Profesional"),
-    (51, 55, "👨🏾‍🦲 Pemulung Pemula"),
-    (56, 60, "👨🏽‍🦲 Pemulung Biasa"),
-    (61, 65, "👨🏼‍🦲 Pemulung Senior"),
-    (66, 70, "👨🏻‍🦲 Pemulung Profesional"),
-    (71, 75, "🧌 Miskin"),
-    (76, 80, "👫 Rakyat Biasa"),
-    (81, 85, "🎎 Rakyat Menengah Kebawah"),
-    (86, 90, "👷🏻 Rakyat Menengah"),
-    (91, 95, "🤵🏻‍♀ Orang Kaya"),
-    (96, 100, "👩🏻‍🚀 Kaum Elite"),
-    (101, 110, "Bangsawan"),
-    (111, 120, "🥉 Konglomerat III"),
-    (121, 130, "🥈 Konglomerat II"),
-    (131, 140, "🥇 Konglomerat I"),
-    (141, 149, "🎖 Elite Nasional"),
+    (1, 5, "💩 Manusia Antah Berantah"), (6, 10, "👩🏿‍🦲 Super Gembel"), (11, 15, "👩🏾‍🦲 Gembel"),
+    (16, 20, "👩🏽‍🦲 Gembel Elite"), (21, 25, "👩🏼‍🦲 Jelata"), (26, 30, "🪔 Pengemis Pemula"),
+    (31, 40, "🪔 Pengemis Biasa"), (41, 45, "🪔 Pengemis Senior"), (46, 50, "🪔 Pengemis Profesional"),
+    (51, 55, "👨🏾‍🦲 Pemulung Pemula"), (56, 60, "👨🏽‍🦲 Pemulung Biasa"), (61, 65, "👨🏼‍🦲 Pemulung Senior"),
+    (66, 70, "👨🏻‍🦲 Pemulung Profesional"), (71, 75, "🧌 Miskin"), (76, 80, "👫 Rakyat Biasa"),
+    (81, 85, "🎎 Rakyat Menengah Kebawah"), (86, 90, "👷🏻 Rakyat Menengah"), (91, 95, "🤵🏻‍♀ Orang Kaya"),
+    (96, 100, "👩🏻‍🚀 Kaum Elite"), (101, 110, "Bangsawan"), (111, 120, "🥉 Konglomerat III"),
+    (121, 130, "🥈 Konglomerat II"), (131, 140, "🥇 Konglomerat I"), (141, 149, "🎖 Elite Nasional"),
     (150, 9999, "🐛 Naga"),
 ]
 
+ITEMS = {
+    "banana": {"name": "🍌 Kulit Pisang", "price": 200, "desc": "Damage 5-10"},
+    "sandal": {"name": "🩴 Sandal Emak", "price": 2500, "desc": "Damage 7-12"},
+    "luck_potion": {"name": "🧪 Lucky Potion", "price": 5000, "desc": "Buff luck +5% (pakai /lp)"},
+    "shield_3": {"name": "🛡️ Perisai Kelas III", "price": 1000, "desc": "Stack max 3, auto saat kena /dor Kelas III"},
+    "pistol_3": {"name": "🔫 Pistol Kelas III", "price": 5000, "desc": "Untuk /dor"},
+    "potion_red": {"name": "🧪 Potion Merah", "price": 100, "desc": "Tambah HP 10% (pakai /pot)"},
+    "armor_item": {"name": "🦺 Armor", "price": 5000, "desc": "Tambah armor +100 (pakai /armor)"},
+}
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +56,11 @@ class UserProfile:
     exp: int
     custom_role: Optional[str]
     custom_level: Optional[int]
+    register_date: str
+    hp: int
+    armor: int
+    inventory_capacity: int
+    luck_buff_until: int
 
 
 def get_connection() -> sqlite3.Connection:
@@ -93,17 +80,52 @@ def init_db() -> None:
                 cash INTEGER NOT NULL DEFAULT 1000,
                 level INTEGER NOT NULL DEFAULT 1,
                 exp INTEGER NOT NULL DEFAULT 0,
-                last_exp_time INTEGER NOT NULL DEFAULT 0
+                last_exp_time INTEGER NOT NULL DEFAULT 0,
+                custom_role TEXT,
+                custom_level INTEGER,
+                register_date TEXT,
+                hp INTEGER NOT NULL DEFAULT 200,
+                armor INTEGER NOT NULL DEFAULT 0,
+                inventory_capacity INTEGER NOT NULL DEFAULT 5,
+                last_daily INTEGER NOT NULL DEFAULT 0,
+                last_weekly INTEGER NOT NULL DEFAULT 0,
+                luck_buff_until INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_items (
+                telegram_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                qty INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (telegram_id, item_key)
+            )
+            """
+        )
+        columns = {c["name"] for c in conn.execute("PRAGMA table_info(users)").fetchall()}
+        migrations = {
+            "custom_role": "TEXT",
+            "custom_level": "INTEGER",
+            "register_date": "TEXT",
+            "hp": "INTEGER NOT NULL DEFAULT 200",
+            "armor": "INTEGER NOT NULL DEFAULT 0",
+            "inventory_capacity": "INTEGER NOT NULL DEFAULT 5",
+            "last_daily": "INTEGER NOT NULL DEFAULT 0",
+            "last_weekly": "INTEGER NOT NULL DEFAULT 0",
+            "luck_buff_until": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for col, sql_type in migrations.items():
+            if col not in columns:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {sql_type}")
 
-        columns = conn.execute("PRAGMA table_info(users)").fetchall()
-        col_names = {col["name"] for col in columns}
-        if "custom_role" not in col_names:
-            conn.execute("ALTER TABLE users ADD COLUMN custom_role TEXT")
-        if "custom_level" not in col_names:
-            conn.execute("ALTER TABLE users ADD COLUMN custom_level INTEGER")
+
+def now_wib() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Jakarta"))
+
+
+def format_number(v: int) -> str:
+    return f"{v:,}".replace(",", ".")
 
 
 def exp_needed(level: int) -> int:
@@ -111,541 +133,691 @@ def exp_needed(level: int) -> int:
 
 
 def get_role(level: int) -> str:
-    for start, end, role in ROLE_RANGES:
-        if start <= level <= end:
-            return role
+    for s, e, r in ROLE_RANGES:
+        if s <= level <= e:
+            return r
     return "Tanpa Role"
+
+
+def is_owner(uid: int) -> bool:
+    return BOT_OWNER_ID != 0 and uid == BOT_OWNER_ID
 
 
 def upsert_user(telegram_id: int, full_name: str, username: str) -> None:
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO users (telegram_id, full_name, username, cash, level, exp, last_exp_time)
-            VALUES (?, ?, ?, ?, 1, 0, 0)
+            INSERT INTO users (telegram_id, full_name, username, cash, level, exp, last_exp_time, register_date)
+            VALUES (?, ?, ?, ?, 1, 0, 0, ?)
             ON CONFLICT(telegram_id) DO UPDATE SET
                 full_name=excluded.full_name,
                 username=excluded.username
             """,
-            (telegram_id, full_name, username, INITIAL_CASH),
+            (telegram_id, full_name, username, INITIAL_CASH, now_wib().strftime("%Y-%m-%d")),
         )
+
+
+def row_to_user(r: sqlite3.Row) -> UserProfile:
+    return UserProfile(
+        telegram_id=r["telegram_id"], full_name=r["full_name"], username=r["username"], cash=r["cash"],
+        level=r["level"], exp=r["exp"], custom_role=r["custom_role"], custom_level=r["custom_level"],
+        register_date=r["register_date"] or "-", hp=r["hp"], armor=r["armor"], inventory_capacity=r["inventory_capacity"],
+        luck_buff_until=r["luck_buff_until"],
+    )
 
 
 def get_user(telegram_id: int) -> Optional[UserProfile]:
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT telegram_id, full_name, username, cash, level, exp, custom_role, custom_level FROM users WHERE telegram_id = ?",
-            (telegram_id,),
-        ).fetchone()
-
-    if row is None:
-        return None
-
-    return UserProfile(
-        telegram_id=row["telegram_id"],
-        full_name=row["full_name"],
-        username=row["username"],
-        cash=row["cash"],
-        level=row["level"],
-        exp=row["exp"],
-        custom_role=row["custom_role"],
-        custom_level=row["custom_level"],
-    )
+        row = conn.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+    return row_to_user(row) if row else None
 
 
 def get_user_by_username(username: str) -> Optional[UserProfile]:
-    normalized = username.lstrip("@").strip()
-    if not normalized:
-        return None
-
+    un = username.lstrip("@").strip()
     with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT telegram_id, full_name, username, cash, level, exp, custom_role, custom_level
-            FROM users
-            WHERE LOWER(username) = LOWER(?)
-            """,
-            (normalized,),
-        ).fetchone()
-
-    if row is None:
-        return None
-
-    return UserProfile(
-        telegram_id=row["telegram_id"],
-        full_name=row["full_name"],
-        username=row["username"],
-        cash=row["cash"],
-        level=row["level"],
-        exp=row["exp"],
-        custom_role=row["custom_role"],
-        custom_level=row["custom_level"],
-    )
+        row = conn.execute("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (un,)).fetchone()
+    return row_to_user(row) if row else None
 
 
-def set_custom_role(telegram_id: int, custom_role: str) -> bool:
+def resolve_user_reference(ref: str) -> Optional[UserProfile]:
+    if ref.lstrip("-").isdigit():
+        return get_user(int(ref))
+    return get_user_by_username(ref)
+
+
+def set_custom_role(uid: int, role: str) -> bool:
     with get_connection() as conn:
-        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        if row is None:
+        res = conn.execute("UPDATE users SET custom_role=? WHERE telegram_id=?", (role, uid))
+    return res.rowcount > 0
+
+
+def clear_custom_role(uid: int) -> bool:
+    with get_connection() as conn:
+        res = conn.execute("UPDATE users SET custom_role=NULL WHERE telegram_id=?", (uid,))
+    return res.rowcount > 0
+
+
+def set_custom_level(uid: int, level: int) -> bool:
+    with get_connection() as conn:
+        res = conn.execute("UPDATE users SET custom_level=? WHERE telegram_id=?", (level, uid))
+    return res.rowcount > 0
+
+
+def clear_custom_level(uid: int) -> bool:
+    with get_connection() as conn:
+        res = conn.execute("UPDATE users SET custom_level=NULL WHERE telegram_id=?", (uid,))
+    return res.rowcount > 0
+
+
+def update_cash(uid: int, delta: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT cash FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        if not row:
             return False
-        conn.execute("UPDATE users SET custom_role = ? WHERE telegram_id = ?", (custom_role, telegram_id))
-    return True
-
-
-def clear_custom_role(telegram_id: int) -> bool:
-    with get_connection() as conn:
-        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        if row is None:
-            return False
-        conn.execute("UPDATE users SET custom_role = NULL WHERE telegram_id = ?", (telegram_id,))
-    return True
-
-
-def set_custom_level(telegram_id: int, custom_level: int) -> bool:
-    with get_connection() as conn:
-        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        if row is None:
-            return False
-        conn.execute("UPDATE users SET custom_level = ? WHERE telegram_id = ?", (custom_level, telegram_id))
-    return True
-
-
-def clear_custom_level(telegram_id: int) -> bool:
-    with get_connection() as conn:
-        row = conn.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        if row is None:
-            return False
-        conn.execute("UPDATE users SET custom_level = NULL WHERE telegram_id = ?", (telegram_id,))
-    return True
-
-
-def resolve_user_reference(user_ref: str) -> Optional[UserProfile]:
-    cleaned = user_ref.strip()
-    if not cleaned:
-        return None
-    if cleaned.lstrip("-").isdigit():
-        return get_user(int(cleaned))
-    return get_user_by_username(cleaned)
-
-
-def is_owner(user_id: int) -> bool:
-    return BOT_OWNER_ID != 0 and user_id == BOT_OWNER_ID
-
-
-def format_number(value: int) -> str:
-    return f"{value:,}".replace(",", ".")
-
-
-def grant_exp_if_ready(telegram_id: int) -> Optional[tuple[int, int, int]]:
-    now = int(time.time())
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT level, exp, custom_level, last_exp_time FROM users WHERE telegram_id = ?",
-            (telegram_id,),
-        ).fetchone()
-
-        if row is None:
-            return None
-
-        if now - row["last_exp_time"] < EXP_COOLDOWN_SECONDS:
-            return None
-
-        gained_exp = random.randint(EXP_MIN, EXP_MAX)
-        level = row["level"]
-        exp = row["exp"] + gained_exp
-
-        while exp >= exp_needed(level):
-            exp -= exp_needed(level)
-            level += 1
-
-        conn.execute(
-            "UPDATE users SET exp = ?, level = ?, custom_level = NULL, last_exp_time = ? WHERE telegram_id = ?",
-            (exp, level, now, telegram_id),
-        )
-
-    return gained_exp, level, exp
-
-
-def update_cash(telegram_id: int, delta: int) -> bool:
-    with get_connection() as conn:
-        row = conn.execute("SELECT cash FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        if row is None:
-            return False
-
         new_cash = row["cash"] + delta
         if new_cash < 0:
             return False
-
-        conn.execute("UPDATE users SET cash = ? WHERE telegram_id = ?", (new_cash, telegram_id))
+        conn.execute("UPDATE users SET cash=? WHERE telegram_id=?", (new_cash, uid))
     return True
 
 
-async def create_round_avatar_bytes(context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> Optional[bytes]:
-    photos = await context.bot.get_user_profile_photos(user_id=telegram_id, limit=1)
-    if photos.total_count == 0:
-        return None
+def update_hp_armor(uid: int, hp_delta: int = 0, armor_delta: int = 0) -> None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT hp, armor FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        if not row:
+            return
+        hp = max(0, min(MAX_HP, row["hp"] + hp_delta))
+        armor = max(0, row["armor"] + armor_delta)
+        conn.execute("UPDATE users SET hp=?, armor=? WHERE telegram_id=?", (hp, armor, uid))
 
-    biggest_photo = photos.photos[0][-1]
-    avatar_file = await context.bot.get_file(biggest_photo.file_id)
-    avatar_data = await avatar_file.download_as_bytearray()
 
-    with Image.open(BytesIO(avatar_data)).convert("RGB") as img:
-        size = min(img.width, img.height)
-        left = (img.width - size) // 2
-        top = (img.height - size) // 2
-        square = img.crop((left, top, left + size, top + size))
-        square = ImageOps.fit(square, (64, 64), method=Image.Resampling.LANCZOS)
+def grant_exp_if_ready(uid: int) -> None:
+    now = int(time.time())
+    with get_connection() as conn:
+        row = conn.execute("SELECT level, exp, last_exp_time FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        if not row or now - row["last_exp_time"] < EXP_COOLDOWN_SECONDS:
+            return
+        gained = random.randint(EXP_MIN, EXP_MAX)
+        lvl = row["level"]
+        exp = row["exp"] + gained
+        while exp >= exp_needed(lvl):
+            exp -= exp_needed(lvl)
+            lvl += 1
+        conn.execute(
+            "UPDATE users SET exp=?, level=?, custom_level=NULL, last_exp_time=? WHERE telegram_id=?",
+            (exp, lvl, now, uid),
+        )
 
-        mask = Image.new("L", (64, 64), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.ellipse((0, 0, 63, 63), fill=255)
 
-        rounded = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
-        rounded.paste(square, (0, 0), mask)
+def get_inventory(uid: int) -> dict[str, int]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT item_key, qty FROM user_items WHERE telegram_id=? AND qty>0", (uid,)).fetchall()
+    return {r["item_key"]: r["qty"] for r in rows}
 
-        output = BytesIO()
-        rounded.save(output, format="PNG")
-        output.seek(0)
-        return output.read()
+
+def used_inventory_slots(uid: int) -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM user_items WHERE telegram_id=? AND qty>0", (uid,)).fetchone()
+    return row["c"]
+
+
+def add_item(uid: int, key: str, qty: int = 1, stack_max: Optional[int] = None) -> tuple[bool, str]:
+    user = get_user(uid)
+    if not user:
+        return False, "User tidak ditemukan."
+    inv = get_inventory(uid)
+    curr = inv.get(key, 0)
+    if curr == 0 and used_inventory_slots(uid) >= user.inventory_capacity:
+        return False, f"Inventory penuh ({user.inventory_capacity} slot)."
+    if stack_max is not None and curr + qty > stack_max:
+        return False, f"Item ini maksimal stack {stack_max}."
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_items (telegram_id, item_key, qty)
+            VALUES (?, ?, ?)
+            ON CONFLICT(telegram_id, item_key) DO UPDATE SET qty = qty + excluded.qty
+            """,
+            (uid, key, qty),
+        )
+    return True, "OK"
+
+
+def remove_item(uid: int, key: str, qty: int = 1) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT qty FROM user_items WHERE telegram_id=? AND item_key=?", (uid, key)
+        ).fetchone()
+        if not row or row["qty"] < qty:
+            return False
+        new_qty = row["qty"] - qty
+        if new_qty == 0:
+            conn.execute("DELETE FROM user_items WHERE telegram_id=? AND item_key=?", (uid, key))
+        else:
+            conn.execute("UPDATE user_items SET qty=? WHERE telegram_id=? AND item_key=?", (new_qty, uid, key))
+    return True
+
+
+def luck_active(user: UserProfile) -> bool:
+    return user.luck_buff_until > int(time.time())
+
+
+def choose_pistol(inv: dict[str, int]) -> Optional[tuple[str, int]]:
+    # prioritas dari kelas III -> II -> I
+    for key, cls in [("pistol_3", 3), ("pistol_2", 2), ("pistol_1", 1)]:
+        if inv.get(key, 0) > 0:
+            return key, cls
+    return None
+
+
+def available_shield(inv: dict[str, int]) -> Optional[tuple[str, int]]:
+    for key, cls in [("shield_1", 1), ("shield_2", 2), ("shield_3", 3)]:
+        if inv.get(key, 0) > 0:
+            return key, cls
+    return None
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     user = update.effective_user
-    username = user.username or "-"
-    upsert_user(user.id, user.full_name, username)
-
-    await update.message.reply_text(
-        "Halo! Data kamu sudah didaftarkan. Gunakan /profile untuk lihat status kamu."
-    )
+    upsert_user(user.id, user.full_name, user.username or "-")
+    await update.message.reply_text("Halo! Kamu sudah terdaftar. Gunakan /p atau /profile untuk melihat profil.")
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     user = update.effective_user
-    username = user.username or "-"
-    upsert_user(user.id, user.full_name, username)
-    target_profile: Optional[UserProfile] = None
+    upsert_user(user.id, user.full_name, user.username or "-")
 
+    target: Optional[UserProfile]
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        reply_user = update.message.reply_to_message.from_user
-        reply_username = reply_user.username or "-"
-        upsert_user(reply_user.id, reply_user.full_name, reply_username)
-        target_profile = get_user(reply_user.id)
+        ru = update.message.reply_to_message.from_user
+        upsert_user(ru.id, ru.full_name, ru.username or "-")
+        target = get_user(ru.id)
     elif context.args:
-        target_profile = resolve_user_reference(context.args[0])
+        target = resolve_user_reference(context.args[0])
     else:
-        target_profile = get_user(user.id)
+        target = get_user(user.id)
 
-    if target_profile is None:
+    if not target:
         await update.message.reply_text("Data user tidak ditemukan.")
         return
 
-    shown_level = target_profile.custom_level if target_profile.custom_level else target_profile.level
-    shown_needed = exp_needed(shown_level)
-    role = target_profile.custom_role if target_profile.custom_role else get_role(shown_level)
-    now_wib = datetime.now(ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S WIB")
-    date_part, time_part = now_wib.split(" ", 1)
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("❓ Help", callback_data="menu_help"),
-                InlineKeyboardButton("📢 Ego Federation", url="https://t.me/EgoFederation"),
-            ],
-        ]
-    )
-    response = (
-        f"Nama : {target_profile.full_name}\n"
-        f"Username : @{target_profile.username if target_profile.username != '-' else '-'}\n"
-        f"ID : {target_profile.telegram_id}\n"
-        f"Cash : {format_number(target_profile.cash)}\n"
-        f"Level : {shown_level} ({target_profile.exp}/{shown_needed})\n"
+    level_show = target.custom_level or target.level
+    role = target.custom_role or get_role(level_show)
+    t = now_wib()
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("❓ Help", callback_data="menu_help"),
+        InlineKeyboardButton("📢 Ego Federation", url="https://t.me/EgoFederation"),
+    ]])
+    text = (
+        f"Nama : {target.full_name}\n"
+        f"Username : @{target.username if target.username != '-' else '-'}\n"
+        f"ID : {target.telegram_id}\n"
+        f"Cash : {format_number(target.cash)}\n"
+        f"Level : {level_show} ({target.exp}/{exp_needed(level_show)})\n"
         f"Role : {role}\n"
-        f"Date : <i>{date_part}</i>\n"
-        f"Time : <i>{time_part}</i>"
+        f"Register Date : <i>{target.register_date}</i>\n"
+        f"Time : <i>{t.strftime('%H:%M:%S WIB')}</i>"
     )
-    avatar_bytes = await create_round_avatar_bytes(context, target_profile.telegram_id)
-    if avatar_bytes:
-        await update.message.reply_photo(
-            photo=avatar_bytes,
-            caption=response,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    await update.message.reply_text(
+        "Daftar command:\n"
+        "/start, /p (/profile), /status, /inv, /shop, /buy <kode>, /pot, /armor, /lp, /dor, /transfer (/tf), /help\n"
+        "/daily, /weekly"
+    )
+
+
+async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.callback_query:
+        return
+    q = update.callback_query
+    await q.answer()
+    if q.data == "menu_help":
+        await q.message.reply_text(
+            "Command pengguna:\n"
+            "/start\n/p atau /profile\n/status\n/inv\n/shop\n/buy <kode>\n/pot\n/armor\n/lp\n/dor\n/transfer atau /tf\n/daily\n/weekly\n/help"
         )
-    else:
-        await update.message.reply_text(response, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
-async def addcoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+async def inventory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    u = get_user(update.effective_user.id)
+    if not u:
+        return
+    inv = get_inventory(u.telegram_id)
+    lines = [f"Inventory ({used_inventory_slots(u.telegram_id)}/{u.inventory_capacity}):"]
+    if not inv:
+        lines.append("(kosong)")
+    for k, q in inv.items():
+        lines.append(f"- {ITEMS.get(k, {'name': k})['name']} x{q}")
+    token_qty = inv.get("token", 0)
+    if token_qty:
+        lines.append(f"- 🪙 Token x{token_qty}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    u = get_user(update.effective_user.id)
+    if not u:
+        return
+    now = int(time.time())
+    buffs: list[str] = []
+    debuffs: list[str] = []
+
+    if u.luck_buff_until > now:
+        remain = u.luck_buff_until - now
+        buffs.append(f"🧪 Lucky +5% ({remain // 60} menit)")
+
+    buff_text = ", ".join(buffs) if buffs else "Tidak ada"
+    debuff_text = ", ".join(debuffs) if debuffs else "Tidak ada"
+    alert = "\n⚠️ ALERT! HP di bawah 20%, beli Potion di /shop lalu pakai /pot" if u.hp < int(MAX_HP * 0.2) else ""
+    await update.message.reply_text(
+        f"HP : {u.hp}/{MAX_HP}\n"
+        f"Armor : {u.armor}\n"
+        f"Buff : {buff_text}\n"
+        f"Debuff : {debuff_text}"
+        f"{alert}"
+    )
+
+
+def can_afford(uid: int, price: int) -> bool:
+    u = get_user(uid)
+    return bool(u and u.cash >= price)
+
+
+async def shop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    u = get_user(update.effective_user.id)
+    if not u:
+        return
+    kb = [[InlineKeyboardButton(f"Beli {v['name']}", callback_data=f"buy:{k}")] for k, v in ITEMS.items()]
+    kb.append([InlineKeyboardButton("🕵️ Secret Shop", callback_data="secret_shop")])
+    text_lines = ["🛒 Shop:"]
+    for k, v in ITEMS.items():
+        text_lines.append(f"- {v['name']} ({v['desc']}) | Harga {format_number(v['price'])} | /buy {k}")
+    await update.message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    if len(context.args) != 1:
+        await update.message.reply_text("Format: /buy <kode_item>")
+        return
+    await process_buy(update.effective_user.id, context.args[0], update.message.reply_text)
+
+
+async def process_buy(uid: int, key: str, reply_fn) -> None:
+    if key not in ITEMS:
+        await reply_fn("Item tidak ditemukan.")
+        return
+    item = ITEMS[key]
+    if not can_afford(uid, item["price"]):
+        await reply_fn("Cash tidak cukup.")
+        return
+    stack_max = 3 if key == "shield_3" else None
+    ok, msg = add_item(uid, key, 1, stack_max=stack_max)
+    if not ok:
+        await reply_fn(msg)
+        return
+    update_cash(uid, -item["price"])
+    await reply_fn(f"Berhasil beli {item['name']} seharga {format_number(item['price'])}.")
+
+
+async def shop_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.callback_query or not update.effective_user:
+        return
+    q = update.callback_query
+    await q.answer()
+    if q.data and q.data.startswith("buy:"):
+        await process_buy(update.effective_user.id, q.data.split(":", 1)[1], q.message.reply_text)
+    elif q.data == "secret_shop":
+        u = get_user(update.effective_user.id)
+        if not u:
+            return
+        lvl = u.custom_level or u.level
+        if lvl < 5:
+            await q.message.reply_text("Secret Shop terbuka di level 5.")
+        else:
+            await q.message.reply_text("🕵️ Secret Shop terbuka! (saat ini belum ada barang)")
+
+
+async def potion_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    uid = update.effective_user.id
+    if not remove_item(uid, "potion_red", 1):
+        await update.message.reply_text("Potion Merah tidak ada di inventory.")
+        return
+    heal = int(MAX_HP * 0.1)
+    update_hp_armor(uid, hp_delta=heal)
+    await update.message.reply_text(f"Kamu menggunakan Potion Merah. HP +{heal}.")
+
+
+async def armor_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    uid = update.effective_user.id
+    if not remove_item(uid, "armor_item", 1):
+        await update.message.reply_text("Armor item tidak ada di inventory.")
+        return
+    update_hp_armor(uid, armor_delta=100)
+    await update.message.reply_text("Armor digunakan. Armor +100.")
+
+
+async def lp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    uid = update.effective_user.id
+    if not remove_item(uid, "luck_potion", 1):
+        await update.message.reply_text("Lucky Potion tidak ada di inventory.")
+        return
+    until = int(time.time()) + 60 * 60
+    with get_connection() as conn:
+        conn.execute("UPDATE users SET luck_buff_until=? WHERE telegram_id=?", (until, uid))
+    await update.message.reply_text("Lucky Potion aktif 60 menit. Buff luck +5%.")
+
+
+def resolve_target_from_update(update: Update, args: list[str]) -> Optional[UserProfile]:
+    if update.message and update.message.reply_to_message and update.message.reply_to_message.from_user:
+        r = update.message.reply_to_message.from_user
+        upsert_user(r.id, r.full_name, r.username or "-")
+        return get_user(r.id)
+    if args:
+        return resolve_user_reference(args[0])
+    return None
+
+
+async def dor_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    attacker = get_user(update.effective_user.id)
+    if not attacker:
+        return
+    target = resolve_target_from_update(update, context.args)
+    if not target or target.telegram_id == attacker.telegram_id:
+        await update.message.reply_text("Target tidak valid. Gunakan reply atau /dor <id/@username>.")
         return
 
-    if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+    inv_att = get_inventory(attacker.telegram_id)
+    pistol = choose_pistol(inv_att)
+    if not pistol:
+        await update.message.reply_text("Kamu tidak punya pistol di inventory.")
         return
 
-    if len(context.args) != 2:
-        await update.message.reply_text('Format: /addcoin <id_user> <jumlah>')
-        return
+    pistol_key, pistol_class = pistol
+    remove_item(attacker.telegram_id, pistol_key, 1)
 
-    try:
-        target_id = int(context.args[0])
-        amount = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("ID dan jumlah harus berupa angka.")
-        return
+    base_steal = random.randint(1, 50)
+    if luck_active(attacker):
+        base_steal = int(base_steal * 1.05)
+    base_damage = {1: 25, 2: 20, 3: 15}[pistol_class]
 
-    if amount <= 0:
-        await update.message.reply_text("Jumlah coin harus lebih dari 0.")
-        return
+    inv_target = get_inventory(target.telegram_id)
+    shield = available_shield(inv_target)
+    note = ""
+    steal = base_steal
+    damage = base_damage
 
-    if not update_cash(target_id, amount):
-        await update.message.reply_text("Gagal menambah cash. Pastikan user sudah terdaftar lewat /start.")
-        return
+    if shield:
+        shield_key, shield_class = shield
+        class_diff = shield_class - pistol_class
+        if class_diff == 0:
+            remove_item(target.telegram_id, shield_key, 1)
+            note = "🛡️ Target memiliki perisai kelas sama. Serangan ditahan."
+            if random.random() <= 0.025:
+                steal = max(1, int(steal * 0.8))
+                damage = 0
+                note += " Chance 2.5% aktif, kamu tetap mencuri kecil."
+            else:
+                steal = 0
+                damage = 0
+        elif class_diff == 1:
+            remove_item(target.telegram_id, shield_key, 1)
+            damage = int(damage * 0.85)
+            steal = int(steal * 0.85)
+            note = "🛡️ Perisai target hancur, damage/cash tereduksi 15%."
+        elif class_diff <= -1:
+            # pistol lebih tinggi >=1 tingkat
+            remove_item(target.telegram_id, shield_key, 1)
+            red = random.randint(5, 10) if class_diff <= -2 else 15
+            damage = int(damage * (100 - red) / 100)
+            steal = int(steal * (100 - red) / 100)
+            note = f"🛡️ Perisai target hancur, reduksi {red}% karena beda kelas."
 
-    await update.message.reply_text(f"Berhasil menambah {format_number(amount)} cash ke user ID {target_id}.")
+    target_cash = target.cash
+    steal = min(steal, target_cash)
+    if steal > 0:
+        update_cash(target.telegram_id, -steal)
+        update_cash(attacker.telegram_id, steal)
+
+    if damage > 0:
+        # armor menyerap dulu
+        remaining = damage
+        if target.armor > 0:
+            absorbed = min(target.armor, remaining)
+            update_hp_armor(target.telegram_id, armor_delta=-absorbed)
+            remaining -= absorbed
+        if remaining > 0:
+            update_hp_armor(target.telegram_id, hp_delta=-remaining)
+
+    await update.message.reply_text(
+        f"/dor berhasil ke {target.full_name} dengan Pistol Kelas {pistol_class}.\n"
+        f"Cash dicuri: {format_number(steal)}\nDamage: {damage}\n{note}"
+    )
 
 
 async def transfer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     sender = update.effective_user
-    username = sender.username or "-"
-    upsert_user(sender.id, sender.full_name, username)
-
+    upsert_user(sender.id, sender.full_name, sender.username or "-")
     if len(context.args) != 2:
         await update.message.reply_text("Format: /transfer <id_tujuan> <jumlah>")
         return
-
     try:
-        target_id = int(context.args[0])
-        amount = int(context.args[1])
+        tid = int(context.args[0]); amount = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("ID tujuan dan jumlah harus angka.")
+        await update.message.reply_text("ID/jumlah harus angka.")
         return
-
-    if amount <= 0:
-        await update.message.reply_text("Jumlah transfer harus lebih dari 0.")
+    if amount <= 0 or tid == sender.id:
+        await update.message.reply_text("Nominal/target tidak valid.")
         return
-
-    if target_id == sender.id:
-        await update.message.reply_text("Tidak bisa transfer ke diri sendiri.")
+    target = get_user(tid)
+    if not target:
+        await update.message.reply_text("Target belum terdaftar.")
         return
-
-    target = get_user(target_id)
-    if target is None:
-        await update.message.reply_text("User tujuan belum terdaftar. Minta user tujuan /start dulu.")
-        return
-
     if not update_cash(sender.id, -amount):
-        await update.message.reply_text("Cash kamu tidak cukup.")
+        await update.message.reply_text("Cash tidak cukup.")
         return
-
-    update_cash(target_id, amount)
-    now_wib = datetime.now(ZoneInfo("Asia/Jakarta"))
-    transfer_date = now_wib.strftime("%Y-%m-%d")
-    transfer_time = now_wib.strftime("%H:%M:%S WIB")
+    update_cash(tid, amount)
+    nw = now_wib()
     await update.message.reply_text(
-        (
-            f"<i>Transfer berhasil: {format_number(amount)} cash ke ID {target_id}.</i>\n"
-            f"<i>Tanggal: {transfer_date}</i>\n"
-            f"<i>Jam: {transfer_time}</i>"
-        ),
+        f"<i>Transfer berhasil: {format_number(amount)} cash ke ID {tid}.</i>\n"
+        f"<i>Tanggal: {nw.strftime('%Y-%m-%d')}</i>\n"
+        f"<i>Jam: {nw.strftime('%H:%M:%S WIB')}</i>",
         parse_mode=ParseMode.HTML,
     )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None:
+async def addcoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
         return
-    text = (
-        "Daftar command:\n"
-        "/start - daftar/update akun\n"
-        "/profile [id/@username] - lihat profil sendiri/target\n"
-        "Balas pesan orang lalu /profile untuk lihat profil dia\n"
-        "/transfer <id_tujuan> <jumlah>\n"
-        "/tf <id_tujuan> <jumlah>\n"
-        "/help - bantuan command"
-    )
-    await update.message.reply_text(text)
-
-
-async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query is None:
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Owner only.")
         return
-
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "menu_help":
-        await query.message.reply_text(
-            (
-                "Daftar command pengguna:\n"
-                "/start - daftar/update akun\n"
-                "/profile [id/@username] - lihat profil\n"
-                "/transfer <id_tujuan> <jumlah>\n"
-                "/tf <id_tujuan> <jumlah>\n"
-                "/help - bantuan"
-            )
-        )
+    if len(context.args) != 2:
+        await update.message.reply_text("Format: /addcoin <id> <jumlah>")
+        return
+    try:
+        tid = int(context.args[0]); amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("ID/jumlah harus angka.")
+        return
+    if amount <= 0 or not update_cash(tid, amount):
+        await update.message.reply_text("Gagal menambah cash.")
+        return
+    await update.message.reply_text(f"Berhasil menambah {format_number(amount)} cash ke {tid}.")
 
 
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        await update.message.reply_text("Owner only.")
         return
-
     if len(context.args) < 2:
-        await update.message.reply_text("Format: /setrole <id_user> <role_custom>")
+        await update.message.reply_text("Format: /setrole <id/@username> <role>")
         return
-
-    target_profile = resolve_user_reference(context.args[0])
-    if target_profile is None:
-        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
+    tgt = resolve_user_reference(context.args[0])
+    if not tgt:
+        await update.message.reply_text("User tidak ditemukan.")
         return
-
-    custom_role = " ".join(context.args[1:]).strip()
-    if not custom_role:
-        await update.message.reply_text("Role custom tidak boleh kosong.")
-        return
-
-    set_custom_role(target_profile.telegram_id, custom_role)
-
-    await update.message.reply_text(
-        f"Role user {target_profile.full_name} (ID {target_profile.telegram_id}) berhasil diubah ke: {custom_role}"
-    )
+    set_custom_role(tgt.telegram_id, " ".join(context.args[1:]))
+    await update.message.reply_text("Custom role diatur.")
 
 
 async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        await update.message.reply_text("Owner only.")
         return
-
     if len(context.args) != 1:
-        await update.message.reply_text("Format: /clearrole <id_user>")
+        await update.message.reply_text("Format: /clearrole <id/@username>")
         return
-
-    target_profile = resolve_user_reference(context.args[0])
-    if target_profile is None:
-        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
+    tgt = resolve_user_reference(context.args[0])
+    if not tgt:
+        await update.message.reply_text("User tidak ditemukan.")
         return
-
-    clear_custom_role(target_profile.telegram_id)
-
-    await update.message.reply_text(
-        f"Role custom user {target_profile.full_name} (ID {target_profile.telegram_id}) berhasil dihapus."
-    )
+    clear_custom_role(tgt.telegram_id)
+    await update.message.reply_text("Custom role dihapus.")
 
 
 async def setlevel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        await update.message.reply_text("Owner only.")
         return
-
     if len(context.args) != 2:
-        await update.message.reply_text("Format: /setlevel <id_user/@username> <level_custom>")
+        await update.message.reply_text("Format: /setlevel <id/@username> <level>")
         return
-
-    target_profile = resolve_user_reference(context.args[0])
-    if target_profile is None:
-        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
+    tgt = resolve_user_reference(context.args[0])
+    if not tgt:
+        await update.message.reply_text("User tidak ditemukan.")
         return
-
     try:
-        custom_level = int(context.args[1])
+        level = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("Level custom harus berupa angka.")
+        await update.message.reply_text("Level harus angka.")
         return
-
-    if custom_level < 1:
-        await update.message.reply_text("Level custom minimal 1.")
-        return
-
-    set_custom_level(target_profile.telegram_id, custom_level)
-    await update.message.reply_text(
-        f"Level custom user {target_profile.full_name} (ID {target_profile.telegram_id}) diubah ke {custom_level}."
-    )
+    set_custom_level(tgt.telegram_id, max(1, level))
+    await update.message.reply_text("Custom level diatur.")
 
 
 async def defaultlevel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.message is None:
+    if not update.effective_user or not update.message:
         return
-
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Perintah ini hanya untuk owner bot.")
+        await update.message.reply_text("Owner only.")
         return
-
     if len(context.args) != 1:
-        await update.message.reply_text("Format: /defaultlevel <id_user/@username>")
+        await update.message.reply_text("Format: /defaultlevel <id/@username>")
         return
-
-    target_profile = resolve_user_reference(context.args[0])
-    if target_profile is None:
-        await update.message.reply_text("User tidak ditemukan. Gunakan ID atau @username yang sudah terdaftar.")
+    tgt = resolve_user_reference(context.args[0])
+    if not tgt:
+        await update.message.reply_text("User tidak ditemukan.")
         return
+    clear_custom_level(tgt.telegram_id)
+    await update.message.reply_text("Custom level dihapus.")
 
-    clear_custom_level(target_profile.telegram_id)
-    await update.message.reply_text(
-        f"Level user {target_profile.full_name} (ID {target_profile.telegram_id}) dikembalikan ke level asli."
-    )
+
+async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE, weekly: bool = False) -> None:
+    if not update.effective_user or not update.message:
+        return
+    uid = update.effective_user.id
+    now = int(time.time())
+    col = "last_weekly" if weekly else "last_daily"
+    cd = 7 * 24 * 3600 if weekly else 24 * 3600
+    reward = 3 if weekly else 1
+    with get_connection() as conn:
+        row = conn.execute(f"SELECT {col} FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        if not row:
+            return
+        if now - row[col] < cd:
+            remain = cd - (now - row[col])
+            await update.message.reply_text(f"Belum bisa claim. Tunggu {remain//3600} jam lagi.")
+            return
+        conn.execute(f"UPDATE users SET {col}=? WHERE telegram_id=?", (now, uid))
+    add_item(uid, "token", reward)
+    await update.message.reply_text(f"Berhasil claim {'weekly' if weekly else 'daily'}: +{reward} token.")
+
+
+async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await claim_command(update, context, weekly=False)
+
+
+async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await claim_command(update, context, weekly=True)
 
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None:
+    if not update.effective_user or not update.effective_chat:
         return
-
-    chat = update.effective_chat
-    if chat is None:
+    if update.effective_chat.type not in {"group", "supergroup"}:
         return
-
-    if chat.type not in {"group", "supergroup"}:
-        return
-
-    user = update.effective_user
-    username = user.username or "-"
-    upsert_user(user.id, user.full_name, username)
-    grant_exp_if_ready(user.id)
+    u = update.effective_user
+    upsert_user(u.id, u.full_name, u.username or "-")
+    grant_exp_if_ready(u.id)
 
 
 def main() -> None:
     token = os.getenv("BOT_TOKEN")
     if not token:
-        raise RuntimeError("BOT_TOKEN belum diset di environment.")
-
+        raise RuntimeError("BOT_TOKEN belum diset")
     init_db()
+    app = Application.builder().token(token).build()
 
-    application = Application.builder().token(token).build()
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler(["profile", "p"], profile_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("inv", inventory_command))
+    app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("shop", shop_command))
+    app.add_handler(CommandHandler("buy", buy_command))
+    app.add_handler(CommandHandler("pot", potion_command))
+    app.add_handler(CommandHandler("armor", armor_command))
+    app.add_handler(CommandHandler("lp", lp_command))
+    app.add_handler(CommandHandler("dor", dor_command))
+    app.add_handler(CommandHandler(["transfer", "tf"], transfer_command))
+    app.add_handler(CommandHandler("daily", daily_command))
+    app.add_handler(CommandHandler("weekly", weekly_command))
 
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("profile", profile_command))
-    application.add_handler(CommandHandler("addcoin", addcoin_command))
-    application.add_handler(CommandHandler("transfer", transfer_command))
-    application.add_handler(CommandHandler("tf", transfer_command))
-    application.add_handler(CommandHandler("setrole", setrole_command))
-    application.add_handler(CommandHandler("clearrole", clearrole_command))
-    application.add_handler(CommandHandler("setlevel", setlevel_command))
-    application.add_handler(CommandHandler("defaultlevel", defaultlevel_command))
-    application.add_handler(CallbackQueryHandler(menu_callback_handler, pattern="^menu_"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, group_message_handler))
+    app.add_handler(CommandHandler("addcoin", addcoin_command))
+    app.add_handler(CommandHandler("setrole", setrole_command))
+    app.add_handler(CommandHandler("clearrole", clearrole_command))
+    app.add_handler(CommandHandler("setlevel", setlevel_command))
+    app.add_handler(CommandHandler("defaultlevel", defaultlevel_command))
+
+    app.add_handler(CallbackQueryHandler(menu_callback_handler, pattern="^menu_help$"))
+    app.add_handler(CallbackQueryHandler(shop_callback_handler, pattern="^(buy:|secret_shop)"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, group_message_handler))
 
     logger.info("Bot berjalan...")
-    application.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":

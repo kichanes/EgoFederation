@@ -1,89 +1,62 @@
 # Telegram Level + Currency Bot
 
-Bot Telegram ini punya fitur:
-- Lihat profil user: nama, username, ID, cash, level, progress exp, role.
-- Sistem exp otomatis saat user chat di grup (cooldown 5 menit, exp random 5-15).
-- Level up dengan kebutuhan exp bertingkat (`level * 100`).
-- Role otomatis berdasarkan range level.
-- Owner bot bisa tambah cash user lain: `/addcoin <id_user> <jumlah>`.
-- Owner bot bisa custom role user via ID/username: `/setrole <id_user/@username> <role_custom>`.
-- Owner bot bisa hapus custom role user via ID/username: `/clearrole <id_user/@username>`.
-- Transfer cash antar user: `/transfer <id_tujuan> <jumlah>` atau `/tf <id_tujuan> <jumlah>`.
-- Command bantuan: `/help`.
-- User baru otomatis dapat 1.000 cash.
-- Datetime otomatis tampil saat menggunakan `/profile` dengan timezone WIB.
-- Saat `/profile` dikirim, bot menampilkan 2 bubble ber-emoji: `❓ Help` dan link CH komunitas `📢 Ego Federation` (`t.me/EgoFederation`).
-- Saat `/profile` dikirim, bot menampilkan foto profil user berbentuk bulat (ukuran kecil) jika tersedia.
+Bot Telegram ini memiliki fitur:
+- Profil user (`/profile` atau `/p`) berisi nama, username, id, cash, level, role, register date, dan time.
+- Sistem EXP otomatis di grup (5-15 EXP, cooldown 5 menit).
+- Currency + transfer (`/transfer` atau `/tf`).
+- Inventory (`/inv`) dengan kapasitas default 5 slot.
+- HP/Armor status (`/status`) + daftar buff/debuff + alert otomatis jika HP < 20%.
+- Shop (`/shop`) dengan bubble item dan pembelian via bubble atau `/buy <kode_item>`.
+- Item pakai command:
+  - `/pot` (Potion Merah, +10% HP)
+  - `/armor` (pakai Armor item, +100 armor)
+  - `/lp` (Lucky Potion, buff luck +5% selama 60 menit)
+- Combat `/dor` (reply atau target ID/@username) dengan logika pistol/perisai.
+- Token dari `/daily` dan `/weekly`.
+- Secret shop terbuka saat level >= 5.
 
 ## Instalasi
 
-1. Buat bot di BotFather dan ambil token.
-2. Install dependency:
-
 ```bash
 pip install -r requirements.txt
-```
-
-3. Salin `.env.example` jadi `.env`, lalu isi:
-
-```env
-BOT_TOKEN=...
-BOT_OWNER_ID=...
-DB_PATH=bot_data.sqlite3
-```
-
-4. Jalankan bot (contoh dengan export env):
-
-```bash
-export $(cat .env | xargs)
+cp .env.example .env
+# isi BOT_TOKEN dan BOT_OWNER_ID
 python bot.py
 ```
 
 ## Menjalankan 24 Jam Tanpa Railway/Heroku (1 Repo)
 
-Project ini sudah disiapkan agar bisa jalan otomatis di server sendiri (VPS/rumah) pakai Docker Compose:
-- `docker-compose.yml` memakai `restart: unless-stopped` supaya bot auto nyala lagi setelah crash/restart container.
-- data SQLite disimpan ke volume Docker `bot_data` di path `/data/bot_data.sqlite3` supaya data user tetap aman saat container restart.
-
-Langkah:
+Gunakan Docker Compose:
 
 ```bash
-cp .env.example .env
-# isi BOT_TOKEN dan BOT_OWNER_ID
 docker compose up -d --build
-```
-
-Untuk cek log:
-
-```bash
 docker compose logs -f telegram-bot
 ```
 
-## Command
+`docker-compose.yml` sudah menggunakan `restart: unless-stopped` dan volume `bot_data` agar database tetap aman saat restart/crash.
 
-- `/start` -> registrasi/update data user.
-- `/profile` -> tampilkan profil sendiri.
-- `/profile <id/@username>` -> tampilkan profil user lain.
-- Reply pesan user lalu ketik `/profile` -> tampilkan profil user yang direply.
-- `/addcoin <id_user> <jumlah>` -> owner only.
-- `/setrole <id_user/@username> <role_custom>` -> owner only (set role manual).
-- `/clearrole <id_user/@username>` -> owner only (kembali ke role otomatis dari level).
-- `/setlevel <id_user/@username> <level_custom>` -> owner only (set level manual).
-- `/defaultlevel <id_user/@username>` -> owner only (kembalikan ke level asli dari EXP).
-- `/transfer <id_tujuan> <jumlah>` -> transfer cash.
-- `/tf <id_tujuan> <jumlah>` -> alias singkat transfer.
-- Setelah transfer berhasil, bot akan menampilkan konfirmasi italic + tanggal & jam pengiriman (WIB).
-- `/help` -> tampilkan daftar command.
+## Command User
 
-## Format Profil
+- `/start`
+- `/p` atau `/profile`
+- `/status`
+- `/inv`
+- `/shop`
+- `/buy <kode_item>`
+- `/pot`
+- `/armor`
+- `/lp`
+- `/dor <id/@username>` atau reply lalu `/dor`
+- `/transfer <id_tujuan> <jumlah>`
+- `/tf <id_tujuan> <jumlah>`
+- `/daily`
+- `/weekly`
+- `/help`
 
-```text
-Nama :
-Username :
-ID :
-Cash :
-Level : 15 (exp_saat_ini/exp_diperlukan)
-Role :
-Date :
-Time :
-```
+## Command Owner
+
+- `/addcoin <id_user> <jumlah>`
+- `/setrole <id/@username> <role>`
+- `/clearrole <id/@username>`
+- `/setlevel <id/@username> <level>`
+- `/defaultlevel <id/@username>`
