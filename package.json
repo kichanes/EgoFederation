@@ -1,0 +1,14 @@
+{
+  "name": "egofederation-bot-data-layer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PostgreSQL data layer for EgoFederation Telegram bot",
+  "main": "js/userService.js",
+  "type": "commonjs",
+  "scripts": {
+    "check": "node -e \"require('./js/db'); require('./js/userService'); console.log('OK')\""
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
