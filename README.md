@@ -33,7 +33,14 @@ docker compose up -d --build
 docker compose logs -f telegram-bot
 ```
 
-`docker-compose.yml` sudah menggunakan `restart: unless-stopped` dan volume `bot_data` agar database tetap aman saat restart/crash.
+`docker-compose.yml` sudah menggunakan `restart: unless-stopped` + service PostgreSQL (`pg_data` volume) agar data tetap aman saat restart/crash.
+
+## Railway (Agar Data Tidak Hilang Saat Redeploy)
+
+- **Paling direkomendasikan:** pakai `DATABASE_URL` PostgreSQL Railway (persistent).
+- Jika `DATABASE_URL` diisi, bot otomatis memakai PostgreSQL (bukan SQLite lokal).
+- Alternatif: gunakan Railway Volume + `DB_PATH=/data/bot_data.sqlite3`.
+- Jangan pakai path lokal sementara seperti `./bot_data.sqlite3` di Railway jika ingin data tetap ada setelah redeploy.
 
 ## Command User
 
@@ -58,5 +65,5 @@ docker compose logs -f telegram-bot
 - `/addcoin <id_user> <jumlah>`
 - `/setrole <id/@username> <role>`
 - `/clearrole <id/@username>`
-- `/setlevel <id/@username> <level>`
+- `/setlevel <id/@username> <level>` (mengatur level asli + reset EXP ke 0)
 - `/defaultlevel <id/@username>`

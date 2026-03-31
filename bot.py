@@ -8,11 +8,15 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional
 
+import psycopg2
+from psycopg2.extras import DictCursor
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-DB_PATH = os.getenv("DB_PATH", "bot_data.sqlite3")
+DB_PATH = os.getenv("DB_PATH", "/data/bot_data.sqlite3")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+IS_POSTGRES = bool(DATABASE_URL)
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
 INITIAL_CASH = 1000
 EXP_MIN = 5
@@ -64,14 +68,34 @@ class UserProfile:
 
 
 def get_connection() -> sqlite3.Connection:
+    if IS_POSTGRES:
+        return psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def _q(query: str) -> str:
+    return query.replace("?", "%s") if IS_POSTGRES else query
+
+
+def db_execute(conn, query: str, params=(), fetch: str = ""):
+    cur = conn.cursor()
+    cur.execute(_q(query), params)
+    if fetch == "one":
+        return cur.fetchone()
+    if fetch == "all":
+        return cur.fetchall()
+    return cur.rowcount
+
+
 def init_db() -> None:
     with get_connection() as conn:
-        conn.execute(
+        db_execute(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
@@ -91,9 +115,10 @@ def init_db() -> None:
                 last_weekly INTEGER NOT NULL DEFAULT 0,
                 luck_buff_until INTEGER NOT NULL DEFAULT 0
             )
-            """
+            """,
         )
-        conn.execute(
+        db_execute(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS user_items (
                 telegram_id INTEGER NOT NULL,
@@ -101,23 +126,34 @@ def init_db() -> None:
                 qty INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (telegram_id, item_key)
             )
-            """
+            """,
         )
-        columns = {c["name"] for c in conn.execute("PRAGMA table_info(users)").fetchall()}
-        migrations = {
-            "custom_role": "TEXT",
-            "custom_level": "INTEGER",
-            "register_date": "TEXT",
-            "hp": "INTEGER NOT NULL DEFAULT 200",
-            "armor": "INTEGER NOT NULL DEFAULT 0",
-            "inventory_capacity": "INTEGER NOT NULL DEFAULT 5",
-            "last_daily": "INTEGER NOT NULL DEFAULT 0",
-            "last_weekly": "INTEGER NOT NULL DEFAULT 0",
-            "luck_buff_until": "INTEGER NOT NULL DEFAULT 0",
-        }
-        for col, sql_type in migrations.items():
-            if col not in columns:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {sql_type}")
+        if IS_POSTGRES:
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_role TEXT")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_level INTEGER")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS register_date TEXT")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS hp INTEGER NOT NULL DEFAULT 200")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS armor INTEGER NOT NULL DEFAULT 0")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS inventory_capacity INTEGER NOT NULL DEFAULT 5")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily BIGINT NOT NULL DEFAULT 0")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_weekly BIGINT NOT NULL DEFAULT 0")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS luck_buff_until BIGINT NOT NULL DEFAULT 0")
+        else:
+            columns = {c["name"] for c in db_execute(conn, "PRAGMA table_info(users)", fetch="all")}
+            migrations = {
+                "custom_role": "TEXT",
+                "custom_level": "INTEGER",
+                "register_date": "TEXT",
+                "hp": "INTEGER NOT NULL DEFAULT 200",
+                "armor": "INTEGER NOT NULL DEFAULT 0",
+                "inventory_capacity": "INTEGER NOT NULL DEFAULT 5",
+                "last_daily": "INTEGER NOT NULL DEFAULT 0",
+                "last_weekly": "INTEGER NOT NULL DEFAULT 0",
+                "luck_buff_until": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for col, sql_type in migrations.items():
+                if col not in columns:
+                    db_execute(conn, f"ALTER TABLE users ADD COLUMN {col} {sql_type}")
 
 
 def now_wib() -> datetime:
@@ -145,7 +181,8 @@ def is_owner(uid: int) -> bool:
 
 def upsert_user(telegram_id: int, full_name: str, username: str) -> None:
     with get_connection() as conn:
-        conn.execute(
+        db_execute(
+            conn,
             """
             INSERT INTO users (telegram_id, full_name, username, cash, level, exp, last_exp_time, register_date)
             VALUES (?, ?, ?, ?, 1, 0, 0, ?)
@@ -168,14 +205,14 @@ def row_to_user(r: sqlite3.Row) -> UserProfile:
 
 def get_user(telegram_id: int) -> Optional[UserProfile]:
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        row = db_execute(conn, "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,), fetch="one")
     return row_to_user(row) if row else None
 
 
 def get_user_by_username(username: str) -> Optional[UserProfile]:
     un = username.lstrip("@").strip()
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (un,)).fetchone()
+        row = db_execute(conn, "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (un,), fetch="one")
     return row_to_user(row) if row else None
 
 
@@ -187,54 +224,54 @@ def resolve_user_reference(ref: str) -> Optional[UserProfile]:
 
 def set_custom_role(uid: int, role: str) -> bool:
     with get_connection() as conn:
-        res = conn.execute("UPDATE users SET custom_role=? WHERE telegram_id=?", (role, uid))
+        res = db_execute(conn, "UPDATE users SET custom_role=? WHERE telegram_id=?", (role, uid))
     return res.rowcount > 0
 
 
 def clear_custom_role(uid: int) -> bool:
     with get_connection() as conn:
-        res = conn.execute("UPDATE users SET custom_role=NULL WHERE telegram_id=?", (uid,))
+        res = db_execute(conn, "UPDATE users SET custom_role=NULL WHERE telegram_id=?", (uid,))
     return res.rowcount > 0
 
 
 def set_custom_level(uid: int, level: int) -> bool:
     with get_connection() as conn:
-        res = conn.execute("UPDATE users SET custom_level=? WHERE telegram_id=?", (level, uid))
+        res = db_execute(conn, "UPDATE users SET custom_level=? WHERE telegram_id=?", (level, uid))
     return res.rowcount > 0
 
 
 def clear_custom_level(uid: int) -> bool:
     with get_connection() as conn:
-        res = conn.execute("UPDATE users SET custom_level=NULL WHERE telegram_id=?", (uid,))
+        res = db_execute(conn, "UPDATE users SET custom_level=NULL WHERE telegram_id=?", (uid,))
     return res.rowcount > 0
 
 
 def update_cash(uid: int, delta: int) -> bool:
     with get_connection() as conn:
-        row = conn.execute("SELECT cash FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        row = db_execute(conn, "SELECT cash FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row:
             return False
         new_cash = row["cash"] + delta
         if new_cash < 0:
             return False
-        conn.execute("UPDATE users SET cash=? WHERE telegram_id=?", (new_cash, uid))
+        db_execute(conn, "UPDATE users SET cash=? WHERE telegram_id=?", (new_cash, uid))
     return True
 
 
 def update_hp_armor(uid: int, hp_delta: int = 0, armor_delta: int = 0) -> None:
     with get_connection() as conn:
-        row = conn.execute("SELECT hp, armor FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        row = db_execute(conn, "SELECT hp, armor FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row:
             return
         hp = max(0, min(MAX_HP, row["hp"] + hp_delta))
         armor = max(0, row["armor"] + armor_delta)
-        conn.execute("UPDATE users SET hp=?, armor=? WHERE telegram_id=?", (hp, armor, uid))
+        db_execute(conn, "UPDATE users SET hp=?, armor=? WHERE telegram_id=?", (hp, armor, uid))
 
 
 def grant_exp_if_ready(uid: int) -> None:
     now = int(time.time())
     with get_connection() as conn:
-        row = conn.execute("SELECT level, exp, last_exp_time FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        row = db_execute(conn, "SELECT level, exp, last_exp_time FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row or now - row["last_exp_time"] < EXP_COOLDOWN_SECONDS:
             return
         gained = random.randint(EXP_MIN, EXP_MAX)
@@ -243,7 +280,8 @@ def grant_exp_if_ready(uid: int) -> None:
         while exp >= exp_needed(lvl):
             exp -= exp_needed(lvl)
             lvl += 1
-        conn.execute(
+        db_execute(
+            conn,
             "UPDATE users SET exp=?, level=?, custom_level=NULL, last_exp_time=? WHERE telegram_id=?",
             (exp, lvl, now, uid),
         )
@@ -251,13 +289,13 @@ def grant_exp_if_ready(uid: int) -> None:
 
 def get_inventory(uid: int) -> dict[str, int]:
     with get_connection() as conn:
-        rows = conn.execute("SELECT item_key, qty FROM user_items WHERE telegram_id=? AND qty>0", (uid,)).fetchall()
+        rows = db_execute(conn, "SELECT item_key, qty FROM user_items WHERE telegram_id=? AND qty>0", (uid,), fetch="all")
     return {r["item_key"]: r["qty"] for r in rows}
 
 
 def used_inventory_slots(uid: int) -> int:
     with get_connection() as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM user_items WHERE telegram_id=? AND qty>0", (uid,)).fetchone()
+        row = db_execute(conn, "SELECT COUNT(*) AS c FROM user_items WHERE telegram_id=? AND qty>0", (uid,), fetch="one")
     return row["c"]
 
 
@@ -272,7 +310,8 @@ def add_item(uid: int, key: str, qty: int = 1, stack_max: Optional[int] = None) 
     if stack_max is not None and curr + qty > stack_max:
         return False, f"Item ini maksimal stack {stack_max}."
     with get_connection() as conn:
-        conn.execute(
+        db_execute(
+            conn,
             """
             INSERT INTO user_items (telegram_id, item_key, qty)
             VALUES (?, ?, ?)
@@ -285,16 +324,17 @@ def add_item(uid: int, key: str, qty: int = 1, stack_max: Optional[int] = None) 
 
 def remove_item(uid: int, key: str, qty: int = 1) -> bool:
     with get_connection() as conn:
-        row = conn.execute(
+        row = db_execute(
+            conn,
             "SELECT qty FROM user_items WHERE telegram_id=? AND item_key=?", (uid, key)
-        ).fetchone()
+            , fetch="one")
         if not row or row["qty"] < qty:
             return False
         new_qty = row["qty"] - qty
         if new_qty == 0:
-            conn.execute("DELETE FROM user_items WHERE telegram_id=? AND item_key=?", (uid, key))
+            db_execute(conn, "DELETE FROM user_items WHERE telegram_id=? AND item_key=?", (uid, key))
         else:
-            conn.execute("UPDATE user_items SET qty=? WHERE telegram_id=? AND item_key=?", (new_qty, uid, key))
+            db_execute(conn, "UPDATE user_items SET qty=? WHERE telegram_id=? AND item_key=?", (new_qty, uid, key))
     return True
 
 
@@ -345,7 +385,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Data user tidak ditemukan.")
         return
 
-    level_show = target.custom_level or target.level
+    level_show = target.level
     role = target.custom_role or get_role(level_show)
     t = now_wib()
     keyboard = InlineKeyboardMarkup([[
@@ -487,7 +527,7 @@ async def shop_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         u = get_user(update.effective_user.id)
         if not u:
             return
-        lvl = u.custom_level or u.level
+        lvl = u.level
         if lvl < 5:
             await q.message.reply_text("Secret Shop terbuka di level 5.")
         else:
@@ -526,7 +566,7 @@ async def lp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     until = int(time.time()) + 60 * 60
     with get_connection() as conn:
-        conn.execute("UPDATE users SET luck_buff_until=? WHERE telegram_id=?", (until, uid))
+        db_execute(conn, "UPDATE users SET luck_buff_until=? WHERE telegram_id=?", (until, uid))
     await update.message.reply_text("Lucky Potion aktif 60 menit. Buff luck +5%.")
 
 
@@ -724,8 +764,16 @@ async def setlevel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except ValueError:
         await update.message.reply_text("Level harus angka.")
         return
-    set_custom_level(tgt.telegram_id, max(1, level))
-    await update.message.reply_text("Custom level diatur.")
+    target_level = max(1, level)
+    with get_connection() as conn:
+        db_execute(
+            conn,
+            "UPDATE users SET level=?, exp=0, custom_level=NULL WHERE telegram_id=?",
+            (target_level, tgt.telegram_id),
+        )
+    await update.message.reply_text(
+        f"Level asli user diatur ke {target_level} dengan EXP 0 (bukan level ilusi)."
+    )
 
 
 async def defaultlevel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -754,14 +802,14 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE, week
     cd = 7 * 24 * 3600 if weekly else 24 * 3600
     reward = 3 if weekly else 1
     with get_connection() as conn:
-        row = conn.execute(f"SELECT {col} FROM users WHERE telegram_id=?", (uid,)).fetchone()
+        row = db_execute(conn, f"SELECT {col} FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row:
             return
         if now - row[col] < cd:
             remain = cd - (now - row[col])
             await update.message.reply_text(f"Belum bisa claim. Tunggu {remain//3600} jam lagi.")
             return
-        conn.execute(f"UPDATE users SET {col}=? WHERE telegram_id=?", (now, uid))
+        db_execute(conn, f"UPDATE users SET {col}=? WHERE telegram_id=?", (now, uid))
     add_item(uid, "token", reward)
     await update.message.reply_text(f"Berhasil claim {'weekly' if weekly else 'daily'}: +{reward} token.")
 
