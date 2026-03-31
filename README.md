@@ -17,6 +17,7 @@ Bot Telegram ini memiliki fitur:
 - Combat `/dor` (reply atau target ID/@username) dengan logika pistol/perisai.
 - Token dari `/daily` dan `/weekly`.
 - Secret shop terbuka saat level >= 5.
+- Premium user punya privilage: Double EXP, hadiah claim daily/weekly double, dan diskon shop 30%.
 
 ## Instalasi
 
@@ -73,6 +74,7 @@ docker compose logs -f telegram-bot
 Catatan: command owner-only **hanya didokumentasikan di README ini** dan tidak ditampilkan di `/help` maupun bubble help bot.
 
 - `/addcoin` atau `/ac` `<id_user> <jumlah>`
+- `/premiumuser` atau `/pu` `<id/@username>`
 - `/setrole` atau `/sr` `<id/@username> <role>`
 - `/clearrole` atau `/cr` `<id/@username>`
 - `/setlevel` atau `/sl` `<id/@username> <level>` (mengatur level asli + reset EXP ke 0)

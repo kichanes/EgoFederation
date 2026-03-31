@@ -88,6 +88,7 @@ class UserProfile:
     armor: int
     inventory_capacity: int
     luck_buff_until: int
+    is_premium: int
 
 
 def get_connection() -> sqlite3.Connection:
@@ -136,7 +137,8 @@ def init_db() -> None:
                 inventory_capacity INTEGER NOT NULL DEFAULT 5,
                 last_daily INTEGER NOT NULL DEFAULT 0,
                 last_weekly INTEGER NOT NULL DEFAULT 0,
-                luck_buff_until INTEGER NOT NULL DEFAULT 0
+                luck_buff_until INTEGER NOT NULL DEFAULT 0,
+                is_premium INTEGER NOT NULL DEFAULT 0
             )
             """,
         )
@@ -176,6 +178,7 @@ def init_db() -> None:
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily BIGINT NOT NULL DEFAULT 0")
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_weekly BIGINT NOT NULL DEFAULT 0")
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS luck_buff_until BIGINT NOT NULL DEFAULT 0")
+            db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium INTEGER NOT NULL DEFAULT 0")
         else:
             columns = {c["name"] for c in db_execute(conn, "PRAGMA table_info(users)", fetch="all")}
             migrations = {
@@ -188,6 +191,7 @@ def init_db() -> None:
                 "last_daily": "INTEGER NOT NULL DEFAULT 0",
                 "last_weekly": "INTEGER NOT NULL DEFAULT 0",
                 "luck_buff_until": "INTEGER NOT NULL DEFAULT 0",
+                "is_premium": "INTEGER NOT NULL DEFAULT 0",
             }
             for col, sql_type in migrations.items():
                 if col not in columns:
@@ -249,7 +253,7 @@ def row_to_user(r: sqlite3.Row) -> UserProfile:
         telegram_id=r["telegram_id"], full_name=r["full_name"], username=r["username"], cash=r["cash"],
         level=r["level"], exp=r["exp"], custom_role=r["custom_role"], custom_level=r["custom_level"],
         register_date=r["register_date"] or "-", hp=r["hp"], armor=r["armor"], inventory_capacity=r["inventory_capacity"],
-        luck_buff_until=r["luck_buff_until"],
+        luck_buff_until=r["luck_buff_until"], is_premium=r["is_premium"],
     )
 
 
@@ -296,6 +300,12 @@ def clear_custom_level(uid: int) -> bool:
     return res > 0
 
 
+def set_premium(uid: int, enabled: int) -> bool:
+    with get_connection() as conn:
+        res = db_execute(conn, "UPDATE users SET is_premium=? WHERE telegram_id=?", (enabled, uid))
+    return res > 0
+
+
 def update_cash(uid: int, delta: int) -> bool:
     with get_connection() as conn:
         row = db_execute(conn, "SELECT cash FROM users WHERE telegram_id=?", (uid,), fetch="one")
@@ -321,10 +331,10 @@ def update_hp_armor(uid: int, hp_delta: int = 0, armor_delta: int = 0) -> None:
 def grant_exp_if_ready(uid: int) -> None:
     now = int(time.time())
     with get_connection() as conn:
-        row = db_execute(conn, "SELECT level, exp, last_exp_time FROM users WHERE telegram_id=?", (uid,), fetch="one")
+        row = db_execute(conn, "SELECT level, exp, last_exp_time, is_premium FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row or now - row["last_exp_time"] < EXP_COOLDOWN_SECONDS:
             return
-        gained = random.randint(EXP_MIN, EXP_MAX)
+        gained = random.randint(EXP_MIN, EXP_MAX) * (2 if row["is_premium"] else 1)
         lvl = row["level"]
         exp = row["exp"] + gained
         while exp >= exp_needed(lvl):
@@ -482,6 +492,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"ID : {target.telegram_id}\n"
         f"Cash : {format_number(target.cash)}\n"
         f"Level : {level_show} ({target.exp}/{exp_needed(level_show)})\n"
+        f"Premium : {'Ya' if target.is_premium else 'Tidak'}\n"
         f"Role : {role}\n"
         f"Register Date : <i>{target.register_date}</i>\n"
         f"Time : <i>{t.strftime('%H:%M:%S WIB')}</i>"
@@ -566,18 +577,20 @@ async def shop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     u = get_user(update.effective_user.id)
     if not u:
         return
+    discount = 0.7 if u.is_premium else 1.0
     kb = [[InlineKeyboardButton(f"Beli {v['name']}", callback_data=f"buy:{k}")] for k, v in ITEMS.items()]
     kb.append([InlineKeyboardButton("🕵️ Secret Shop", callback_data="secret_shop")])
     text_lines = [
         "🛒 Shop:",
-        f"- 🍌 Kulit Pisang | Harga {format_number(200)}",
-        f"- 🩴 Sandal Emak | Harga {format_number(2500)}",
-        f"- 🧪 Lucky Potion | Harga {format_number(5000)}",
-        f"- 🛡️ Perisai Kelas III | Harga {format_number(1000)}",
-        f"- 🔫 Pistol Kelas III | Harga {format_number(5000)}",
-        f"- 🩸 Potion Pot HP +10% | Harga {format_number(100)}",
-        f"- 🦺 Armor (Armor+100) | Harga {format_number(5000)}",
+        f"- 🍌 Kulit Pisang | Harga {format_number(int(200 * discount))}",
+        f"- 🩴 Sandal Emak | Harga {format_number(int(2500 * discount))}",
+        f"- 🧪 Lucky Potion | Harga {format_number(int(5000 * discount))}",
+        f"- 🛡️ Perisai Kelas III | Harga {format_number(int(1000 * discount))}",
+        f"- 🔫 Pistol Kelas III | Harga {format_number(int(5000 * discount))}",
+        f"- 🩸 Potion Pot HP +10% | Harga {format_number(int(100 * discount))}",
+        f"- 🦺 Armor (Armor+100) | Harga {format_number(int(5000 * discount))}",
         "",
+        "✨ Premium: Diskon 30% + Double EXP + Double Claim reward" if u.is_premium else "",
         "Beli item via bubble atau command /buy <kode_item>.",
     ]
     await update.message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(kb))
@@ -593,11 +606,16 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def process_buy(uid: int, key: str, reply_fn) -> None:
+    user = get_user(uid)
+    if not user:
+        await reply_fn("User tidak ditemukan.")
+        return
     if key not in ITEMS:
         await reply_fn("Item tidak ditemukan.")
         return
     item = ITEMS[key]
-    if not can_afford(uid, item["price"]):
+    final_price = int(item["price"] * (0.7 if user.is_premium else 1.0))
+    if not can_afford(uid, final_price):
         await reply_fn("Cash tidak cukup.")
         return
     stack_max = 3 if key == "shield_3" else None
@@ -605,9 +623,9 @@ async def process_buy(uid: int, key: str, reply_fn) -> None:
     if not ok:
         await reply_fn(msg)
         return
-    update_cash(uid, -item["price"])
-    log_action("buy", uid, amount=item["price"], item_key=key, description="Pembelian shop")
-    await reply_fn(f"Berhasil beli {item['name']} seharga {format_number(item['price'])}.")
+    update_cash(uid, -final_price)
+    log_action("buy", uid, amount=final_price, item_key=key, description="Pembelian shop")
+    await reply_fn(f"Berhasil beli {item['name']} seharga {format_number(final_price)}.")
 
 
 async def shop_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -862,6 +880,25 @@ async def addcoin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(f"Berhasil menambah {format_number(amount)} cash ke {tid}.")
 
 
+async def premiumuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Owner only.")
+        return
+    if len(context.args) != 1:
+        await update.message.reply_text("Format: /premiumuser <id/@username>")
+        return
+    tgt = resolve_user_reference(context.args[0])
+    if not tgt:
+        await update.message.reply_text("User tidak ditemukan.")
+        return
+    if not set_premium(tgt.telegram_id, 1):
+        await update.message.reply_text("Gagal menjadikan premium user.")
+        return
+    await update.message.reply_text(f"{tgt.full_name} sekarang adalah Premium User ✅")
+
+
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
@@ -1001,9 +1038,11 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE, week
     now = int(time.time())
     col = "last_weekly" if weekly else "last_daily"
     cd = WEEKLY_COOLDOWN if weekly else DAILY_COOLDOWN
-    cash_reward = 500 if weekly else 150
-    exp_reward = 250 if weekly else 50
-    token_reward = 1 if weekly else 0
+    user_state = get_user(uid)
+    premium_mul = 2 if (user_state and user_state.is_premium) else 1
+    cash_reward = (500 if weekly else 150) * premium_mul
+    exp_reward = (250 if weekly else 50) * premium_mul
+    token_reward = (1 if weekly else 0) * premium_mul
     with get_connection() as conn:
         row = db_execute(conn, f"SELECT {col} FROM users WHERE telegram_id=?", (uid,), fetch="one")
         if not row:
@@ -1135,6 +1174,7 @@ def main() -> None:
     app.add_handler(CommandHandler("cd", cooldown_command))
 
     app.add_handler(CommandHandler(["addcoin", "ac"], addcoin_command))
+    app.add_handler(CommandHandler(["premiumuser", "pu"], premiumuser_command))
     app.add_handler(CommandHandler(["setrole", "sr"], setrole_command))
     app.add_handler(CommandHandler(["clearrole", "cr"], clearrole_command))
     app.add_handler(CommandHandler(["setlevel", "sl"], setlevel_command))
