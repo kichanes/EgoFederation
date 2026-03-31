@@ -42,8 +42,8 @@ ITEMS = {
     "luck_potion": {"name": "🧪 Lucky Potion", "price": 5000, "desc": "Buff luck +5% (pakai /lp)"},
     "shield_3": {"name": "🛡️ Perisai Kelas III", "price": 1000, "desc": "Stack max 3, auto saat kena /dor Kelas III"},
     "pistol_3": {"name": "🔫 Pistol Kelas III", "price": 5000, "desc": "Untuk /dor"},
-    "potion_red": {"name": "🧪 Potion Merah", "price": 100, "desc": "Tambah HP 10% (pakai /pot)"},
-    "armor_item": {"name": "🦺 Armor", "price": 5000, "desc": "Tambah armor +100 (pakai /armor)"},
+    "potion_red": {"name": "🩸 Potion Pot HP +10%", "price": 100, "desc": "Tambah HP 10% (pakai /pot)"},
+    "armor_item": {"name": "🦺 Armor (Armor+100)", "price": 5000, "desc": "Tambah armor +100 (pakai /armor)"},
 }
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -225,25 +225,25 @@ def resolve_user_reference(ref: str) -> Optional[UserProfile]:
 def set_custom_role(uid: int, role: str) -> bool:
     with get_connection() as conn:
         res = db_execute(conn, "UPDATE users SET custom_role=? WHERE telegram_id=?", (role, uid))
-    return res.rowcount > 0
+    return res > 0
 
 
 def clear_custom_role(uid: int) -> bool:
     with get_connection() as conn:
         res = db_execute(conn, "UPDATE users SET custom_role=NULL WHERE telegram_id=?", (uid,))
-    return res.rowcount > 0
+    return res > 0
 
 
 def set_custom_level(uid: int, level: int) -> bool:
     with get_connection() as conn:
         res = db_execute(conn, "UPDATE users SET custom_level=? WHERE telegram_id=?", (level, uid))
-    return res.rowcount > 0
+    return res > 0
 
 
 def clear_custom_level(uid: int) -> bool:
     with get_connection() as conn:
         res = db_execute(conn, "UPDATE users SET custom_level=NULL WHERE telegram_id=?", (uid,))
-    return res.rowcount > 0
+    return res > 0
 
 
 def update_cash(uid: int, delta: int) -> bool:
@@ -484,9 +484,18 @@ async def shop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     kb = [[InlineKeyboardButton(f"Beli {v['name']}", callback_data=f"buy:{k}")] for k, v in ITEMS.items()]
     kb.append([InlineKeyboardButton("🕵️ Secret Shop", callback_data="secret_shop")])
-    text_lines = ["🛒 Shop:"]
-    for k, v in ITEMS.items():
-        text_lines.append(f"- {v['name']} ({v['desc']}) | Harga {format_number(v['price'])} | /buy {k}")
+    text_lines = [
+        "🛒 Shop:",
+        f"- 🍌 Kulit Pisang | Harga {format_number(200)}",
+        f"- 🩴 Sandal Emak | Harga {format_number(2500)}",
+        f"- 🧪 Lucky Potion | Harga {format_number(5000)}",
+        f"- 🛡️ Perisai Kelas III | Harga {format_number(1000)}",
+        f"- 🔫 Pistol Kelas III | Harga {format_number(5000)}",
+        f"- 🩸 Potion Pot HP +10% | Harga {format_number(100)}",
+        f"- 🦺 Armor (Armor+100) | Harga {format_number(5000)}",
+        "",
+        "Beli item via bubble atau command /buy <kode_item>.",
+    ]
     await update.message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -725,8 +734,14 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not tgt:
         await update.message.reply_text("User tidak ditemukan.")
         return
-    set_custom_role(tgt.telegram_id, " ".join(context.args[1:]))
-    await update.message.reply_text("Custom role diatur.")
+    role_text = " ".join(context.args[1:]).strip()
+    if not role_text:
+        await update.message.reply_text("Role tidak boleh kosong.")
+        return
+    if not set_custom_role(tgt.telegram_id, role_text):
+        await update.message.reply_text("Gagal mengatur role.")
+        return
+    await update.message.reply_text(f"Custom role user {tgt.full_name} berhasil diatur: {role_text}")
 
 
 async def clearrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -793,6 +808,51 @@ async def defaultlevel_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("Custom level dihapus.")
 
 
+def add_exp_to_user(uid: int, exp_gain: int) -> bool:
+    with get_connection() as conn:
+        row = db_execute(conn, "SELECT level, exp FROM users WHERE telegram_id=?", (uid,), fetch="one")
+        if not row:
+            return False
+        level = row["level"]
+        exp = row["exp"] + exp_gain
+        while exp >= exp_needed(level):
+            exp -= exp_needed(level)
+            level += 1
+        db_execute(conn, "UPDATE users SET level=?, exp=?, custom_level=NULL WHERE telegram_id=?", (level, exp, uid))
+    return True
+
+
+async def addexp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Owner only.")
+        return
+    if len(context.args) != 2:
+        await update.message.reply_text("Format: /addexp <id/@username> <jumlah_exp>")
+        return
+    tgt = resolve_user_reference(context.args[0])
+    if not tgt:
+        await update.message.reply_text("User tidak ditemukan.")
+        return
+    try:
+        exp_gain = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Jumlah exp harus angka.")
+        return
+    if exp_gain <= 0:
+        await update.message.reply_text("Jumlah exp harus lebih dari 0.")
+        return
+    if not add_exp_to_user(tgt.telegram_id, exp_gain):
+        await update.message.reply_text("Gagal menambah exp.")
+        return
+    updated = get_user(tgt.telegram_id)
+    await update.message.reply_text(
+        f"Berhasil tambah {format_number(exp_gain)} EXP ke {tgt.full_name}. "
+        f"Level: {updated.level} ({updated.exp}/{exp_needed(updated.level)})"
+    )
+
+
 async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE, weekly: bool = False) -> None:
     if not update.effective_user or not update.message:
         return
@@ -854,11 +914,12 @@ def main() -> None:
     app.add_handler(CommandHandler("daily", daily_command))
     app.add_handler(CommandHandler("weekly", weekly_command))
 
-    app.add_handler(CommandHandler("addcoin", addcoin_command))
-    app.add_handler(CommandHandler("setrole", setrole_command))
-    app.add_handler(CommandHandler("clearrole", clearrole_command))
-    app.add_handler(CommandHandler("setlevel", setlevel_command))
-    app.add_handler(CommandHandler("defaultlevel", defaultlevel_command))
+    app.add_handler(CommandHandler(["addcoin", "ac"], addcoin_command))
+    app.add_handler(CommandHandler(["setrole", "sr"], setrole_command))
+    app.add_handler(CommandHandler(["clearrole", "cr"], clearrole_command))
+    app.add_handler(CommandHandler(["setlevel", "sl"], setlevel_command))
+    app.add_handler(CommandHandler(["defaultlevel", "dl"], defaultlevel_command))
+    app.add_handler(CommandHandler(["addexp", "ae"], addexp_command))
 
     app.add_handler(CallbackQueryHandler(menu_callback_handler, pattern="^menu_help$"))
     app.add_handler(CallbackQueryHandler(shop_callback_handler, pattern="^(buy:|secret_shop)"))

@@ -6,7 +6,7 @@ Bot Telegram ini memiliki fitur:
 - Currency + transfer (`/transfer` atau `/tf`).
 - Inventory (`/inv`) dengan kapasitas default 5 slot.
 - HP/Armor status (`/status`) + daftar buff/debuff + alert otomatis jika HP < 20%.
-- Shop (`/shop`) dengan bubble item dan pembelian via bubble atau `/buy <kode_item>`.
+- Shop (`/shop`) dengan format daftar item rapi + bubble item dan pembelian via bubble atau `/buy <kode_item>`.
 - Item pakai command:
   - `/pot` (Potion Merah, +10% HP)
   - `/armor` (pakai Armor item, +100 armor)
@@ -62,8 +62,11 @@ docker compose logs -f telegram-bot
 
 ## Command Owner
 
-- `/addcoin <id_user> <jumlah>`
-- `/setrole <id/@username> <role>`
-- `/clearrole <id/@username>`
-- `/setlevel <id/@username> <level>` (mengatur level asli + reset EXP ke 0)
-- `/defaultlevel <id/@username>`
+Catatan: command owner-only **hanya didokumentasikan di README ini** dan tidak ditampilkan di `/help` maupun bubble help bot.
+
+- `/addcoin` atau `/ac` `<id_user> <jumlah>`
+- `/setrole` atau `/sr` `<id/@username> <role>`
+- `/clearrole` atau `/cr` `<id/@username>`
+- `/setlevel` atau `/sl` `<id/@username> <level>` (mengatur level asli + reset EXP ke 0)
+- `/defaultlevel` atau `/dl` `<id/@username>`
+- `/addexp` atau `/ae` `<id/@username> <jumlah_exp>`
