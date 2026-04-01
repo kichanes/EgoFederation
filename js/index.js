@@ -1,8 +1,8 @@
-const db = require("./db");
+const { pool } = require("./db");
 
 // ambil user
 async function getUser(userId) {
-  const res = await db.query(
+  const res = await pool.query(
     "SELECT * FROM users WHERE id = $1",
     [userId]
   );
@@ -11,7 +11,7 @@ async function getUser(userId) {
 
 // simpan/update user
 async function saveUser(userId, user) {
-  await db.query(
+  await pool.query(
     `INSERT INTO users (id, level, exp, data)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (id)

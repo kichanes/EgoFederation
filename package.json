@@ -6,7 +6,8 @@
   "main": "js/userService.js",
   "type": "commonjs",
   "scripts": {
-    "check": "node -e \"require('./js/db'); require('./js/userService'); console.log('OK')\""
+    "check": "node -e \"require('./js/db'); require('./js/userService'); console.log('OK')\"",
+    "db:init": "node ./js/initSchema.js"
   },
   "dependencies": {
     "pg": "^8.16.3"

@@ -9,6 +9,6 @@ COPY bot.py ./
 
 RUN mkdir -p /data
 
-ENV DB_PATH=/data/bot_data.sqlite3
+ENV DB_URI=/data/bot_data.sqlite3
 
 CMD ["python", "bot.py"]
