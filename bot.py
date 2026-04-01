@@ -17,6 +17,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 DB_URI = os.getenv("DB_URI", os.getenv("DB_PATH", "/data/bot_data.sqlite3"))
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 IS_POSTGRES = bool(DATABASE_URL)
+_POSTGRES_FALLBACK_WARNED = False
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
 INITIAL_CASH = 1000
 EXP_MIN = 5
@@ -123,8 +124,14 @@ class UserProfile:
 
 
 def get_connection() -> sqlite3.Connection:
+    global _POSTGRES_FALLBACK_WARNED
     if IS_POSTGRES:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
+        try:
+            return psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
+        except Exception as err:
+            if not _POSTGRES_FALLBACK_WARNED:
+                logger.error("Gagal konek ke PostgreSQL, fallback ke SQLite (DB_URI). Error: %s", err)
+                _POSTGRES_FALLBACK_WARNED = True
     db_dir = os.path.dirname(DB_URI)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
@@ -133,13 +140,17 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
-def _q(query: str) -> str:
-    return query.replace("?", "%s") if IS_POSTGRES else query
+def _is_postgres_conn(conn) -> bool:
+    return isinstance(conn, psycopg2.extensions.connection)
+
+
+def _q(query: str, conn) -> str:
+    return query.replace("?", "%s") if _is_postgres_conn(conn) else query
 
 
 def db_execute(conn, query: str, params=(), fetch: str = ""):
     cur = conn.cursor()
-    cur.execute(_q(query), params)
+    cur.execute(_q(query, conn), params)
     if fetch == "one":
         return cur.fetchone()
     if fetch == "all":
@@ -219,7 +230,7 @@ def init_db() -> None:
             )
             """,
         )
-        if IS_POSTGRES:
+        if _is_postgres_conn(conn):
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_role TEXT")
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_level INTEGER")
             db_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS register_date TEXT")

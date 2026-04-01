@@ -50,6 +50,7 @@ docker compose logs -f telegram-bot
 - **Paling direkomendasikan:** pakai `DATABASE_URL` PostgreSQL Railway (persistent).
 - Jika `DATABASE_URL` diisi, bot otomatis memakai PostgreSQL (bukan SQLite lokal).
 - Saat Railway memberikan kredensial baru, cukup update value `DATABASE_URL` di environment service bot.
+- Jika koneksi PostgreSQL gagal saat runtime, bot akan fallback ke SQLite (`DB_URI`) agar bot tetap jalan.
 - Alternatif: gunakan Railway Volume + `DB_URI=/data/bot_data.sqlite3`.
 - Jangan pakai path lokal sementara seperti `./bot_data.sqlite3` di Railway jika ingin data tetap ada setelah redeploy.
 
@@ -112,6 +113,25 @@ npm run db:init
 `users` sekarang sudah mencakup field economy/cooldown penting: `bank`, `last_daily`, `last_work`, dan `last_exp_time`.
 
 Selain itu, `updateCash` di service sudah memakai 1 query atomik + `RETURNING cash` untuk menghindari race condition saat update saldo bersamaan.
+
+Contoh query dasar:
+
+```sql
+-- Ambil profile user
+SELECT * FROM users WHERE telegram_id = $1;
+
+-- Ambil inventory user + nama item
+SELECT i.name, ui.quantity
+FROM user_items ui
+JOIN items i ON ui.item_id = i.id
+WHERE ui.telegram_id = $1 AND ui.quantity > 0;
+
+-- Tambah item ke inventory (stack)
+INSERT INTO user_items (telegram_id, item_id, quantity)
+VALUES ($1, $2, 1)
+ON CONFLICT (telegram_id, item_id)
+DO UPDATE SET quantity = user_items.quantity + 1;
+```
 
 ## Command User
 
